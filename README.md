@@ -17,8 +17,8 @@ the image below is an overview of all the workflow
 
 Among the different steps of the pipeline:
 
-1. Preprocessing of the data (abundance table and metabolomics)
-2. Taxonomic classification and differential abundance of taxa between time points
-3. Discovering of the pathways potentially expressed and definition of the pathways enriched for each time point
-4. Metabolites classification into chemical groups and search for enriched metabolites per time point
-5. Integration of all the data and Network analysis
+1. **Preprocessing** of the data (abundance table and metabolomics)
+2. **Taxonomic classification** and **differential abundance** of taxa between time points
+3. **Discovering** of the **pathways** potentially expressed and definition of the pathways enriched for each time point
+4. **Metabolites classification** into chemical groups and search for enriched metabolites per time point
+5. **Integration** of all the data and **Network analysis**
