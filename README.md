@@ -1,7 +1,7 @@
 # MultiOmicsFermentation
 
 ## Overview
-MuliOmicsFermentation is a workflow for identifying the dynamics of microorganisms, pathways and metabolites during the fermentation process.
+MuliOmicsFermentation is a workflow for identifying the dynamics of microorganisms, pathways and metabolites throughout the fermentation process.
 The final output is a multi-layered network, in which the layers are the different time points.
 
 It uses different programming languages, in particular R, Python and Bash.
