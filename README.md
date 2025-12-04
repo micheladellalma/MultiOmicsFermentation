@@ -26,3 +26,8 @@ Among the different steps of the pipeline:
 
 ## How to use
 For the initial steps of pre-processing and taxonomic classification
+
+
+## Repository structure
+/scripts contiene solo codici eseguibili da command line.
+/notebooks contiene analisi Rmd e Jupyter con parti descrittive e figure.
