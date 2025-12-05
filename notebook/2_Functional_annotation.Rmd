@@ -1,0 +1,1395 @@
+---
+title: "Functional_annotation"
+output: html_document
+date: "2025-10-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading of the libraries
+```{r cars}
+library(clusterProfiler)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+```{r pressure, echo=FALSE}
+##### T0R1 #####
+# Set working directory
+setwd(".../6_Functional_annotation/T0R1")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_modif.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("egg_nog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+```
+
+```{r pressure, echo=FALSE}
+# Take from the eggnog table only the name of the contigs and the functional annotation (different this time, not KEGG)
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+```
+
+```{r pressure, echo=FALSE}
+# unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+```
+
+```{r pressure, echo=FALSE}
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t0r1 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t0r1 <- left_join(collapsed_kma_t0r1, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t0r1)
+dim(finaltab_t0r1)
+# as we see there are genes not assigned to COG categories
+```
+
+```{r pressure, echo=FALSE}
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t0r1_cleaned <- finaltab_t0r1 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t0r1_cleaned) <- c("Genes", "T0R1", "COG_cat")
+head(finaltab_t0r1_cleaned)
+
+finaltab_t0r1_cleaned$Genes <- NULL
+
+final_t0r1 <- finaltab_t0r1_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T0R1, na.rm = TRUE))
+
+
+# we will repeat this procedure for all the samples in order to end up with a big table in which we can plot the graph
+# containing on the x axis the COG categories, and for each one the 5 samples with the 5 different times (we can think 
+# to take the mean of the replicates)
+head(final_t0r1)
+```
+
+#### T0R2 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd(".../6_Functional_annotation/SWT0R2")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_mod.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t0r2 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t0r2 <- left_join(collapsed_kma_t0r2, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t0r2)
+dim(finaltab_t0r2)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t0r2_cleaned <- finaltab_t0r2 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t0r2_cleaned) <- c("Genes", "T0R2", "COG_cat")
+head(finaltab_t0r2_cleaned)
+
+finaltab_t0r2_cleaned$Genes <- NULL
+
+final_t0r2 <- finaltab_t0r2_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T0R2, na.rm = TRUE))
+
+head(final_t0r2)
+```
+
+##### T0R3 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T0R3")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_depth.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t0r3 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t0r3 <- left_join(collapsed_kma_t0r3, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t0r3)
+dim(finaltab_t0r3)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t0r3_cleaned <- finaltab_t0r3 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t0r3_cleaned) <- c("Genes", "T0R3", "COG_cat")
+head(finaltab_t0r3_cleaned)
+
+finaltab_t0r3_cleaned$Genes <- NULL
+
+final_t0r3 <- finaltab_t0r3_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T0R3, na.rm = TRUE))
+
+head(final_t0r3)
+```
+
+##### T1R1 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T1R1")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_annot.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+#norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+#kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t1r1 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t1r1 <- left_join(collapsed_kma_t1r1, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t1r1)
+dim(finaltab_t1r1)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t1r1_cleaned <- finaltab_t1r1 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t1r1_cleaned) <- c("Genes", "T1R1", "COG_cat")
+head(finaltab_t1r1_cleaned)
+
+final_t1r1 <- finaltab_t1r1_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T1R1, na.rm = TRUE))
+
+head(final_t1r1)
+```
+
+
+#### T1R2 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T1R2")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_out.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t1r2 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t1r2 <- left_join(collapsed_kma_t1r2, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t1r2)
+dim(finaltab_t1r2)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t1r2_cleaned <- finaltab_t1r2 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t1r2_cleaned) <- c("Genes", "T1R2", "COG_cat")
+head(finaltab_t1r2_cleaned)
+
+final_t1r2 <- finaltab_t1r2_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T1R2, na.rm = TRUE))
+
+head(final_t1r2)
+```
+
+#### T1R3 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T1R3")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_annot.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t1r3 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t1r3 <- left_join(collapsed_kma_t1r3, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t1r3)
+dim(finaltab_t1r3)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t1r3_cleaned <- finaltab_t1r3 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t1r3_cleaned) <- c("Genes", "T1R3", "COG_cat")
+head(finaltab_t1r3_cleaned)
+
+final_t1r3 <- finaltab_t1r3_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T1R3, na.rm = TRUE))
+
+head(final_t1r3)
+```
+
+#### T2R1 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T2R1")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t2r1 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t2r1 <- left_join(collapsed_kma_t2r1, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t2r1)
+dim(finaltab_t2r1)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t2r1_cleaned <- finaltab_t2r1 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t2r1_cleaned) <- c("Genes", "T2R1", "COG_cat")
+head(finaltab_t2r1_cleaned)
+
+final_t2r1 <- finaltab_t2r1_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T2R1, na.rm = TRUE))
+
+head(final_t2r1)
+```
+
+#### SWT2R2 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T2R2")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_t2r2.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annotation_t2r2.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t2r2 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t2r2 <- left_join(collapsed_kma_t2r2, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t2r2)
+dim(finaltab_t2r2)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t2r2_cleaned <- finaltab_t2r2 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t2r2_cleaned) <- c("Genes", "T2R2", "COG_cat")
+head(finaltab_t2r2_cleaned)
+
+final_t2r2 <- finaltab_t2r2_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T2R2, na.rm = TRUE))
+
+head(final_t2r2)
+```
+
+##### T2R3 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T2R3")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_t2r3.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_t2r3.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t2r3 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t2r3 <- left_join(collapsed_kma_t2r3, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t2r3)
+dim(finaltab_t2r3)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t2r3_cleaned <- finaltab_t2r3 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t2r3_cleaned) <- c("Genes", "T2R3", "COG_cat")
+head(finaltab_t2r3_cleaned)
+
+final_t2r3 <- finaltab_t2r3_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T2R3, na.rm = TRUE))
+
+head(final_t2r3)
+```
+
+#### T3R1 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T3R1")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_t3r1.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t3r1 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t3r1 <- left_join(collapsed_kma_t3r1, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t3r1)
+dim(finaltab_t3r1)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t3r1_cleaned <- finaltab_t3r1 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t3r1_cleaned) <- c("Genes", "T3R1", "COG_cat")
+head(finaltab_t3r1_cleaned)
+
+finaltab_t3r1_cleaned$Genes <- NULL
+
+final_t3r1 <- finaltab_t3r1_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T3R1, na.rm = TRUE))
+
+head(final_t3r1)
+```
+
+#### T3R2 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T3R2")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_t3r2.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/t3r2_eggnog.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t3r2 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t3r2 <- left_join(collapsed_kma_t3r2, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t3r2)
+dim(finaltab_t3r2)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t3r2_cleaned <- finaltab_t3r2 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t3r2_cleaned) <- c("Genes", "T3R2", "COG_cat")
+head(finaltab_t3r2_cleaned)
+
+finaltab_t3r2_cleaned$Genes <- NULL
+
+final_t3r2 <- finaltab_t3r2_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T3R2, na.rm = TRUE))
+
+head(final_t3r2)
+```
+
+#### T3R3 #####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T3R3")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_t3r3.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/t3r3_eggnog.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t3r3 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t3r3 <- left_join(collapsed_kma_t3r3, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t3r3)
+dim(finaltab_t3r3)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t3r3_cleaned <- finaltab_t3r3 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t3r3_cleaned) <- c("Genes", "T3R3", "COG_cat")
+head(finaltab_t3r3_cleaned)
+
+finaltab_t3r3_cleaned$Genes <- NULL
+
+final_t3r3 <- finaltab_t3r3_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T3R3, na.rm = TRUE))
+
+head(final_t3r3)
+```
+
+#### T5R1 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T5R1")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/t5r1_kma.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/t5r1_eggnog.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t5r1 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t5r1 <- left_join(collapsed_kma_t5r1, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t5r1)
+dim(finaltab_t5r1)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t5r1_cleaned <- finaltab_t5r1 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t5r1_cleaned) <- c("Genes", "T5R1", "COG_cat")
+head(finaltab_t5r1_cleaned)
+
+finaltab_t5r1_cleaned$Genes <- NULL
+
+final_t5r1 <- finaltab_t5r1_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T5R1, na.rm = TRUE))
+
+head(final_t5r1)
+```
+
+#### T5R2 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T5R2")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_t5r2.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/t5r2_eggnog.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t5r2 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t5r2 <- left_join(collapsed_kma_t5r2, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t5r2)
+dim(finaltab_t5r2)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t5r2_cleaned <- finaltab_t5r2 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t5r2_cleaned) <- c("Genes", "T5R2", "COG_cat")
+head(finaltab_t5r2_cleaned)
+
+finaltab_t5r2_cleaned$Genes <- NULL
+
+final_t5r2 <- finaltab_t5r2_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T5R2, na.rm = TRUE))
+
+head(final_t5r2)
+```
+
+#### T5R3 ####
+```{r pressure, echo=FALSE}
+# Set working directory
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/6_Functional_annotation/T5R3/")
+getwd()
+
+# Read the two tables
+kma_table <- read_excel("1_cd_hit_new/kma_depth.xlsx") # the kma output is modified in order
+egg_nog_table <- read_excel("1_cd_hit_new/eggnog_annot.xlsx") # egg nog output in which we have the name of the genes and the name of the pathway
+
+# Take from the eggnog table only the name of the contigs and the functional annotation
+col_keep_egg <- c("#query", "COG_category") # these are the eggnog columns that we have, in particular the name of the gene and the COG category
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg] # take only the columns of our interest
+
+# Unify the two tables
+colnames(kma_table) <- c("Genes", "Depth") # this is the output of kma with the name of the genes and the depth of coverage of the reads on the gene
+colnames(sub_eggnog_table) <- c("Genes", "COG_category")
+
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+
+kma_table$Genes <- norm_names_kma # redefine the Genes names, in order to delete the number after the last underscore
+sub_eggnog_table$Genes <-  norm_names_eggnog
+
+sub_eggnog_table <- sub_eggnog_table %>%
+  mutate(COG_category = str_split(COG_category, pattern = "")) %>%  # split each letter
+  unnest(COG_category)
+
+sub_eggnog_table_cleaned <- sub_eggnog_table %>%
+  mutate(COG_category = str_remove_all(COG_category, "-")) %>%
+  filter(COG_category != "")
+
+head(sub_eggnog_table_cleaned)
+
+# now we merge the table of the eggnog table with the kma table
+collapsed_kma_t5r3 <- kma_table %>%
+ group_by(Genes) %>%
+ summarise(Depth = sum(Depth)) %>%
+ ungroup()
+
+# now we can concatenate the information of egg-nog and kma for the sample at time T0R1
+finaltab_t5r3 <- left_join(collapsed_kma_t5r3, sub_eggnog_table_cleaned, by = "Genes")
+head(finaltab_t5r3)
+dim(finaltab_t5r3)
+# as we see there are genes not assigned to COG categories
+
+# delete all the rows that have NA values in the column "COG_category"
+finaltab_t5r3_cleaned <- finaltab_t5r3 %>%
+  filter(!is.na(COG_category))
+# we do not delete the column "Gene" because is needed to merge with the other replicates
+# now we change the name of the column Depth with the name of the replicate
+colnames(finaltab_t5r3_cleaned) <- c("Genes", "T5R3", "COG_cat")
+head(finaltab_t5r3_cleaned)
+
+finaltab_t5r3_cleaned$Genes <- NULL
+
+final_t5r3 <- finaltab_t5r3_cleaned %>%
+  group_by(COG_cat) %>%
+  summarise(total = sum(T5R3, na.rm = TRUE))
+
+head(final_t5r3)
+```
+
+Concatenate all the tables
+```{r pressure, echo=FALSE}
+# in this final point we will merge all the tables based on the COG_category and we will have all the other columns
+# that represent the depth in the different samples
+colnames(final_t0r1) <- c("COG_cat", "T0R1")
+colnames(final_t0r2) <- c("COG_cat", "T0R2")
+colnames(final_t0r3) <- c("COG_cat", "T0R3")
+colnames(final_t1r1) <- c("COG_cat", "T1R1")
+colnames(final_t1r2) <- c("COG_cat", "T1R2")
+colnames(final_t1r3) <- c("COG_cat", "T1R3")
+colnames(final_t2r1) <- c("COG_cat", "T2R1")
+colnames(final_t2r2) <- c("COG_cat", "T2R2")
+colnames(final_t2r3) <- c("COG_cat", "T2R3")
+colnames(final_t3r1) <- c("COG_cat", "T3R1")
+colnames(final_t3r2) <- c("COG_cat", "T3R2")
+colnames(final_t3r3) <- c("COG_cat", "T3R3")
+colnames(final_t5r1) <- c("COG_cat", "T5R1")
+colnames(final_t5r2) <- c("COG_cat", "T5R2")
+colnames(final_t5r3) <- c("COG_cat", "T5R3")
+
+merged_df <- final_t0r1 %>%
+  full_join(final_t0r2, by = "COG_cat") %>%
+  full_join(final_t0r3, by = "COG_cat") %>%
+  full_join(final_t1r1, by = "COG_cat") %>%
+  full_join(final_t1r2, by = "COG_cat") %>%
+  full_join(final_t1r3, by = "COG_cat") %>%
+  full_join(final_t2r1, by = "COG_cat") %>%
+  full_join(final_t2r2, by = "COG_cat") %>%
+  full_join(final_t2r3, by = "COG_cat") %>%
+  full_join(final_t3r1, by = "COG_cat") %>%
+  full_join(final_t3r2, by = "COG_cat") %>%
+  full_join(final_t3r3, by = "COG_cat") %>%
+  full_join(final_t5r1, by = "COG_cat") %>%
+  full_join(final_t5r2, by = "COG_cat") %>%
+  full_join(final_t5r3, by = "COG_cat")
+
+merged_df <- as.data.frame(merged_df)
+rownames(merged_df) <- merged_df$COG_cat
+merged_df$COG_cat <- NULL
+```
+
+Differential expression computation
+#### T0 vs T1 #####
+```{r pressure, echo=FALSE}
+### Differential expression of functional categories, taking into account replicates
+# subset the table
+sub_t0t1 <- merged_df[,c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3")]
+metadata <- data.frame(
+  SampleID = c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3"),
+  Time = c(0, 0, 0, 1, 1, 1)
+)
+metadata$Time <- factor(metadata$Time)
+rownames(metadata) <- metadata$SampleID
+library(Maaslin2)
+Maaslin2(
+  input_data = sub_t0t1,
+  input_metadata = metadata, # includes time point
+  output = "T0 vs T1/",
+  fixed_effects = c("Time")
+)
+```
+
+#### T1 vs T2 #####
+```{r pressure, echo=FALSE}
+### Differential expression of functional categories, taking into account replicates
+sub_t1t2 <- merged_df[,c("T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3")] 
+metadata <- data.frame(
+  SampleID = c("T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3"),
+  Time = c(1, 1, 1, 2, 2, 2)
+)
+metadata$Time <- factor(metadata$Time)
+rownames(metadata) <- metadata$SampleID
+library(Maaslin2)
+Maaslin2(
+  input_data = sub_t1t2,
+  input_metadata = metadata, # includes time point
+  output = "T1 vs T2/",
+  fixed_effects = c("Time")
+)
+
+# Since T2 vs T3 and T3 vs T5 have no significant results,
+# we decide to do only the comparison T2 vs T5
+```
+
+#### Bubble plots ####
+```{r pressure, echo=FALSE}
+### BUBBLE PLOTS: analysis of potential pathways into different timings of fermentation ##########
+
+# COG description #
+cog_descriptions <- tibble::tibble(
+  COG_cat = c("A","B","C","D","E","F","G","H","I","J","K","L",
+              "M","N","O","P","Q","R","S","T","U","V","Z"),
+  Description = c(
+    "RNA processing and modification",
+    "Chromatin structure and dynamics",
+    "Energy production and conversion",
+    "Cell cycle control, cell division, chromosome partitioning",
+    "Amino acid transport and metabolism",
+    "Nucleotide transport and metabolism",
+    "Carbohydrate transport and metabolism",
+    "Coenzyme transport and metabolism",
+    "Lipid transport and metabolism",
+    "Translation, ribosomal structure and biogenesis",
+    "Transcription",
+    "Replication, recombination and repair",
+    "Cell wall/membrane/envelope biogenesis",
+    "Cell motility",
+    "Posttranslational modification, protein turnover, chaperones",
+    "Inorganic ion transport and metabolism",
+    "Secondary metabolites biosynthesis, transport and catabolism",
+    "General function prediction only",
+    "Function unknown",
+    "Signal transduction mechanisms",
+    "Intracellular trafficking, secretion, and vesicular transport",
+    "Defense mechanisms",
+    "Cytoskeleton"
+  )
+)
+# multiple bubble plots on one line
+facet_wrap(~Comparison, scales="free_x")
+```
+
+```{r pressure, echo=FALSE}
+# now we read the output of maaslin2
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/7_Differential_COG")
+getwd()
+
+t0_t1 <- read.delim("T0 vs T1/significant_results.tsv")
+t1_t2 <- read.delim("T1 vs T2/significant_results.tsv")
+t2_t5 <- read.delim("T2 vs T5/significant_results.tsv")
+
+# before binding by rows all the tables, we add for each table the column "Comparison"
+t0_t1$Comparison <- "T0 vs T1"
+t1_t2$Comparison <- "T1 vs T2"
+#significant_pathways_T2_vs_T3$Comparison <- "T2 vs T3".  we have to delete this comparison since there are not significant different pathways, interesting this thing...
+t2_t5$Comparison <- "T2 vs T5"
+
+# keep only the columns of our interest (value, coef, pval, Comparison)
+t0_t1 <- t0_t1[,c("feature", "value", "coef", "pval", "Comparison")]
+t1_t2 <- t1_t2[,c("feature", "value", "coef", "pval", "Comparison")]
+t2_t5 <- t2_t5[,c("feature", "value", "coef", "pval", "Comparison")]
+
+all_comparisons <- rbind(
+  t0_t1,
+  t1_t2,
+  t2_t5
+)
+
+all_comparisons$Comparison <- factor(
+  all_comparisons$Comparison,
+  levels = c("T0 vs T1", "T1 vs T2", "T2 vs T5")
+)
+
+all_comparisons$direction <- ifelse(all_comparisons$coef > 0, "latter", "former")
+
+# Add the description of each COG category to the dataframe
+colnames(cog_descriptions) <- c("feature", "Description")
+all_comp_final <- merge(all_comparisons, cog_descriptions, by="feature")
+all_comp_final$LegendLabel <- paste0(all_comp_final$feature, ": ", all_comp_final$Description)
+
+# Order 'feature' from A to Z
+all_comp_final$feature <- factor(all_comp_final$feature, levels = sort(unique(all_comp_final$feature)))
+# Reverse the levels to have A at the top and Z at the bottom
+all_comp_final$feature <- factor(all_comp_final$feature, levels = rev(levels(all_comp_final$feature)))
+
+library(ggplot2)
+ggplot(all_comp_final, aes(x = abs(coef), y = feature, shape = LegendLabel), shape = LegendLabel) +
+  geom_point(aes(size = -log10(pval), color = direction, shape = LegendLabel), alpha = 0.8) +
+  scale_color_manual(values = c("former" = "orange", "latter" = "green"),
+                     labels = c("former" = "Enriched in former", "latter" = "Enriched in latter")) +
+  scale_size_continuous(
+    range = c(2, 9.5),  # Adjust range to make bubbles visibly larger
+    name = "-log10(p-value)"  # Optional: more informative legend
+  ) +
+  scale_shape_manual(values = rep(16, length(unique(all_comp_final$LegendLabel)))) +  # same shape for all
+  guides(shape = guide_legend(title = "COG Function", override.aes = list(size = 4))) +
+  facet_wrap(~Comparison, scales = "free_x") +
+  theme_minimal() +
+  labs(
+    title = "COG Activity",
+    x = "Effect size (coefficient)",
+    y = "COG category",
+    color = "-log10(p-value)"
+  ) + 
+  theme_minimal()
+```
+
+# now we take into account only the significant COG categories related to fermentation and we see the change in the timings in which we see a significant change
+# and we take the values from the original table with the number of reads (merged_df)
+#	1. in T0 vs T1, le COG arricchite in T0 sono C, E, O, Q, T e in T1, 
+# M (presente anche in T1 vs T2), P (presente anche in T1 vs T2), U. 
+#	2. in T1 vs T2, le COG arricchite in T1 sono E, M, P e in T2, C, O
+#	3. in T2 vs T5, le COG arricchite in T2 sono E, H, M e in T5, C
+
+# 1. T0 vs T1
+```{r pressure, echo=FALSE}
+rows_to_keep <- c("C", "E", "O", "Q", "T", "M", "P", "U")
+cols_to_keep <- c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3")
+filtered_t01 <- merged_df[rownames(merged_df) %in% rows_to_keep, colnames(merged_df) %in% cols_to_keep]
+colnames(filtered_t01)
+
+T0_means <- rowMeans(filtered_t01[, c("T0R1", "T0R2", "T0R3")])
+T1_means <- rowMeans(filtered_t01[, c("T1R1", "T1R2", "T1R3")])
+T0_sds <- apply(filtered_t01[, c("T0R1", "T0R2", "T0R3")], 1, sd)
+T1_sds <- apply(filtered_t01[, c("T1R1", "T1R2", "T1R3")], 1, sd)
+
+plot_data <- tibble(
+  Gene = rownames(filtered_t01),
+  T0_mean = T0_means,
+  T0_sd = T0_sds,
+  T1_mean = T1_means,
+  T1_sd = T1_sds
+) %>%
+  pivot_longer(cols = c(T0_mean, T1_mean),
+               names_to = "Condition",
+               names_prefix = "",
+               values_to = "Mean") %>%
+  mutate(
+    SD = ifelse(Condition == "T0_mean", T0_sd, T1_sd),
+    Condition = gsub("_mean", "", Condition)
+  )
+
+ggplot(plot_data, aes(x = Gene, y = Mean, fill = Condition)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+   scale_fill_manual(values = c("T0" = "orange", "T1" = "green")) +  # <-- Added line
+  labs(
+    title = "T0 vs T1",
+    x = "COG categories",
+    y = "Expression (Mean ± SD)",
+    fill = "Condition"
+  ) +
+  theme_minimal()
+```
+
+# 2. T1 vs T2
+```{r pressure, echo=FALSE}
+rows_to_keep <- c("E", "M", "P", "C", "O")
+cols_to_keep <- c("T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3")
+filtered_t12 <- merged_df[rownames(merged_df) %in% rows_to_keep, colnames(merged_df) %in% cols_to_keep]
+
+T1_means <- rowMeans(filtered_t12[, c("T1R1", "T1R2", "T1R3")])
+T2_means <- rowMeans(filtered_t12[, c("T2R1", "T2R2", "T2R3")])
+T1_sds <- apply(filtered_t12[, c("T1R1", "T1R2", "T1R3")], 1, sd)
+T2_sds <- apply(filtered_t12[, c("T2R1", "T2R2", "T2R3")], 1, sd)
+
+plot_data <- tibble(
+  Gene = rownames(filtered_t12),
+  T1_mean = T1_means,
+  T1_sd = T1_sds,
+  T2_mean = T2_means,
+  T2_sd = T2_sds
+) %>%
+  pivot_longer(cols = c(T1_mean, T2_mean),
+               names_to = "Condition",
+               names_prefix = "",
+               values_to = "Mean") %>%
+  mutate(
+    SD = ifelse(Condition == "T1_mean", T1_sd, T2_sd),
+    Condition = gsub("_mean", "", Condition)
+  )
+
+ggplot(plot_data, aes(x = Gene, y = Mean, fill = Condition)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+  scale_fill_manual(values = c("T1" = "orange", "T2" = "green")) +  # <-- Added line
+  labs(
+    title = "T1 vs T2",
+    x = "COG categories",
+    y = "Expression (Mean ± SD)",
+    fill = "Condition"
+  ) +
+  theme_minimal()
+```
+
+# 3. T2 vs T5
+```{r pressure, echo=FALSE}
+rows_to_keep <- c("E", "H", "M", "C")
+cols_to_keep <- c("T2R1", "T2R2", "T2R3", "T5R1", "T5R2", "T5R3")
+filtered_t25 <- merged_df[rownames(merged_df) %in% rows_to_keep, colnames(merged_df) %in% cols_to_keep]
+
+T2_means <- rowMeans(filtered_t25[, c("T2R1", "T2R2", "T2R3")])
+T5_means <- rowMeans(filtered_t25[, c("T5R1", "T5R2")])
+T2_sds <- apply(filtered_t25[, c("T2R1", "T2R2", "T2R3")], 1, sd)
+T5_sds <- apply(filtered_t25[, c("T5R1", "T5R2", "T5R3")], 1, sd)
+
+plot_data <- tibble(
+  Gene = rownames(filtered_t25),
+  T2_mean = T2_means,
+  T2_sd = T2_sds,
+  T5_mean = T5_means,
+  T5_sd = T5_sds
+) %>%
+  pivot_longer(cols = c(T2_mean, T5_mean),
+               names_to = "Condition",
+               names_prefix = "",
+               values_to = "Mean") %>%
+  mutate(
+    SD = ifelse(Condition == "T2_mean", T2_sd, T5_sd),
+    Condition = gsub("_mean", "", Condition)
+  )
+
+ggplot(plot_data, aes(x = Gene, y = Mean, fill = Condition)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+  scale_fill_manual(values = c("T2" = "orange", "T5" = "green")) +
+  labs(
+    title = "T2 vs T5",
+    x = "COG categories",
+    y = "Expression (Mean ± SD)",
+    fill = "Condition"
+  ) +
+  theme_minimal()
+```
+
+```{r pressure, echo=FALSE}
+# trend in time of the COG functional categories, taking into account only the significant COGs
+t0_t1 <- read.delim("T0 vs T1/significant_results.tsv")
+t1_t2 <- read.delim("T1 vs T2/significant_results.tsv")
+t2_t5 <- read.delim("T2 vs T5/significant_results.tsv")
+
+# to do this table we have to discard the informaion of the replicates because the significant cog categories per sample are computed with maslin2 that takes into account
+# all the replicates and give as output the categories that are enriched in which timepoint
+# so when we will extract the values of the significant COG for sample, we will take an average of the replicates for that sample
+
+# so for now we will take an average of the replicates for each sample
+merged_df_means <- merged_df %>%
+  mutate(
+    T0 = rowMeans(select(., starts_with("T0R")), na.rm = TRUE),
+    T1 = rowMeans(select(., starts_with("T1R")), na.rm = TRUE),
+    T2 = rowMeans(select(., starts_with("T2R")), na.rm = TRUE),
+    T3 = rowMeans(select(., starts_with("T3R")), na.rm = TRUE),
+    T5 = rowMeans(select(., starts_with("T5R")), na.rm = TRUE)
+  )
+
+sub_merged_means <- merged_df_means[ , which(names(merged_df_means) == "T0"):ncol(merged_df_means)]
+```
+
+
+```{r pressure, echo=FALSE}
+# take only the significant COGs for each time point
+t0_t1$Enriched_in <- ifelse(t0_t1$coef > 0, "1", "0")
+t1_t2$Enriched_in <- ifelse(t1_t2$coef > 0, "2", "1")
+t2_t5$Enriched_in <- ifelse(t2_t5$coef > 0, "5", "2")
+
+t0_t1_sign <- t0_t1[which(t0_t1$Enriched_in == "0"),]
+t0_cog_sign <- t0_t1_sign$feature
+
+t0_t1_sign <- t0_t1[which(t0_t1$Enriched_in == "1"),]
+t1_cog_sign <- t0_t1_sign$feature
+
+t1_t2_sign <- t1_t2[which(t1_t2$Enriched_in == "1"),]
+t1_cog_sign_2 <- t1_t2_sign$feature
+
+t1_t2_sign <- t1_t2[which(t1_t2$Enriched_in == "2"),]
+t2_cog_sign <- t1_t2_sign$feature
+
+t2_t5_sign <- t2_t5[which(t2_t5$Enriched_in == "2"),]
+t2_cog_sign_2 <- t2_t5_sign$feature
+
+t2_t5_sign <- t2_t5[which(t2_t5$Enriched_in == "5"),]
+t5_cog_sign <- t2_t5_sign$feature
+
+# unify the two t1 and two t2 cog lists
+t1_cog_sign <- c(t1_cog_sign, t1_cog_sign_2)
+t2_cog_sign <- c(t2_cog_sign, t2_cog_sign_2)
+
+# take only the categories that are significant for each time point and plot the trend in time
+length(unique(c(t0_cog_sign, t1_cog_sign, t2_cog_sign, t5_cog_sign)))
+```
+
+##### Graph on functional annotation in time #####
+```{r pressure, echo=FALSE}
+# using the merged_df table we will see the COG categories that are significant for fermentation and we will do a 
+# graph in time for the significant ones, (before doing this we will have to take the mean of the replicates, and compute a standard deviation 
+# to display on the graph)
+merged_df_means <- as.data.frame(merged_df_means)
+col <- c("T0", "T1", "T2", "T3", "T5")
+merged_df_means_new <- merged_df_means %>% select(col)
+```
+
+##### HIstogram for each time point the abundanceof the COGs ######
+```{r pressure, echo=FALSE}
+library(tidyverse)
+
+merged_df_means_2 <- merged_df_means %>%
+  rownames_to_column(var = "COG")
+
+# Porta in formato lungo
+df_long <- merged_df_means_2 %>%
+  pivot_longer(
+    cols = -COG,                      # tutte le colonne tranne COG
+    names_to = "Sample", 
+    values_to = "baseMean"
+  ) %>%
+  mutate(
+    Time = sub("R[0-9]+", "", Sample) # estrae T0, T1, T2, ecc.
+  )
+
+# Calcola media e deviazione standard
+stats <- df_long %>%
+  group_by(COG, Time) %>%
+  summarise(
+    mean_baseMean = mean(baseMean, na.rm = TRUE),
+    sd_baseMean = sd(baseMean, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(plot_data, aes(x = COG, y = mean_baseMean, fill = Time)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+  labs(
+    title = "T3 vs T5",
+    x = "COG categories",
+    y = "Expression (Mean ± SD)"
+  )  + 
+  scale_fill_manual(values = c("T3" = "orange", "T5" = "green")) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 10, face="bold")  # <-- change this number to make it smaller or larger
+  )
+```

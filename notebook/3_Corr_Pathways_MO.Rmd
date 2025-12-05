@@ -1,0 +1,413 @@
+---
+title: "corr_pathways_MO"
+output: html_document
+date: "2025-10-20"
+---
+
+## Set the working directory
+```{r cars}
+setwd(".../9_Corr_Pathways_MO")
+getwd()
+```
+
+## Read the table of the microorganisms and the pathways
+```{r pressure, echo=FALSE}
+setwd(".../9_Corr_Pathways_MO")
+library(readxl)
+data_MO <- read_excel("table_MO.xlsx")
+data_pathways <- read_excel("table_pathways.xlsx")
+dim(data_pathways)
+```
+
+```{r pressure, echo=FALSE}
+# take the significant and relevant pathways for fermentation
+sign_path <- read_excel("..../8_Corr_Pathways_Metabolites/unique_pathways.xlsx")
+
+head(sign_path)
+# take from the table of the pathways only the ones that have been found significant 
+new_pathways <- data_pathways[which(data_pathways$RowName %in% sign_path$unique_pathways), ]
+dim(new_pathways)
+rownames_path <- new_pathways$RowName
+new_pathways$RowName <- NULL
+rownames(new_pathways) <- rownames_path
+```
+
+# transpose the matrix and take the mean between replicates
+```{r pressure, echo=FALSE}
+t_data_path <- as.data.frame(t(new_pathways))
+head(t_data_path)
+```
+
+# take the mean between replicates
+```{r pressure, echo=FALSE, warning=FALSE}
+# Example data
+rownames(t_data_path)
+group_ids <- c("T0", "T0", "T0", "T1", "T1", "T1", "T2", "T2", "T2", "T3", "T3", "T3", "T5", "T5")
+
+# Compute average per group
+t_data_path$GroupID <- group_ids
+t_data_path_new <- aggregate(. ~ GroupID, data = t_data_path, FUN = mean)
+rownames(t_data_path_new) <- t_data_path_new$GroupID
+t_data_path_new$GroupID <- NULL
+head(t_data_path_new)
+```
+
+```{r pressure, echo=FALSE} warning=FALSE}
+setwd(".../9_Corr_Pathways_MO")
+getwd()
+
+table_MO <- read_excel("table_MO.xlsx")
+rownames(table_MO) <- table_MO$RowNames
+head(table_MO)
+```
+
+```{r pressure, echo=FALSE}
+table_MO$RowNames <- NULL
+rownames(table_MO) <- c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3", "T3R1", "T3R2", "T3R3", "T5R2", "T5R3")
+```
+
+
+Take the mean for all the replicates
+```{r pressure, echo=FALSE}
+# Example data
+rownames(table_MO)
+group_ids <- c("T0", "T0", "T0", "T1", "T1", "T1", "T2", "T2", "T2", "T3", "T3", "T3", "T5", "T5")
+
+# Compute average per group
+table_MO$GroupID <- group_ids
+table_MO <- aggregate(. ~ GroupID, data = table_MO, FUN = mean)
+rownames(table_MO) <- table_MO$GroupID
+table_MO$GroupID <- NULL
+head(table_MO)
+table_MO <- as.data.frame(table_MO)
+```
+
+# Filter only specific species that belong to the "Eukaryota" kingdom
+```{r pressure, echo=FALSE, warning=FALSE}
+fungi_t0t1 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t0vst1/fungi_t0vst1.xlsx")
+fungi_t1t2 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t1vst2/fungi_t1vst2.xlsx")
+fungi_t2t3 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t2vst3/fungi_t2vst3.xlsx")
+tot_fungi <- c(fungi_t0t1$feature, fungi_t1t2$feature, fungi_t2t3$feature)
+length(tot_fungi)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+# take from the table_MO only this 65 euakryota
+table_MO_new <- table_MO[, (names(table_MO) %in% tot_fungi)]
+dim(table_MO_new)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+library(pheatmap)
+library(RColorBrewer)
+setwd(".../9_Corr_Pathways_MO/")
+getwd()
+# 3. Initialize a matrix to store results
+# Correct dimensions
+results_tau  <- matrix(NA, nrow = ncol(table_MO_new), ncol = ncol(t_data_path_new))
+results_pval <- matrix(NA, nrow = ncol(table_MO_new), ncol = ncol(t_data_path_new))
+
+# Optional: add row/col names for clarity
+rownames(results_tau)  <- colnames(table_MO_new)
+colnames(results_tau)  <- colnames(t_data_path_new)
+rownames(results_pval) <- colnames(table_MO_new)
+colnames(results_pval) <- colnames(t_data_path_new)
+
+#otu_avg <- otu_avg[, colnames(otu_avg) %in% cols_to_keep]
+
+# 4. Loop over all compound-microbe pairs and compute Kendall's tau
+for (i in seq_len(ncol(table_MO_new))) {
+  for (j in seq_len(ncol(t_data_path_new))) {
+    x <- as.numeric(as.character(table_MO_new[, i]))
+    y <- as.numeric(as.character(t_data_path_new[, j]))
+    test_result <- cor.test(x, y, method = "spearman", use = "pairwise.complete.obs")
+    results_tau[i, j]  <- test_result$estimate
+    results_pval[i, j] <- test_result$p.value
+  }
+}
+
+# 5. Convert to data frame if needed
+results_df <- as.data.frame(results_tau)
+write.table(results_df, "spearman_correlation_fungi_path.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+
+results_clean <- results_df
+results_clean[is.na(results_clean)] <- 0
+#results_clean[is.infinite(results_clean)] <- 0
+
+pheatmap(results_clean,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         main = "Kendall Correlation Heatmap",
+         fontsize = 4,            # overall font size
+         fontsize_row = 5,        # row labels (e.g., metabolites)
+         fontsize_col = 5)
+
+# Paleta sobria de colores
+n_groups <- length(unique(groups))
+colors <- brewer.pal(n = max(3, min(n_groups, 8)), name = "Set1")
+# Ajustar márgenes para espacio extra abajo
+par(mar = c(6, 4, 4, 2))  # más espacio en margen inferior
+# Gráfico con puntos coloreados por grupo
+groups <- sub("R[0-9]+$", "", rownames(pcoa$points))
+group_factor <- factor(groups)
+plot(pcoa$points[,1], pcoa$points[,2],
+     col = colors[group_factor], pch = 19,
+     xlab = paste0("PCoA1 (", round(100 * pcoa$eig[1] / sum(pcoa$eig), 1), "%)"),
+     ylab = paste0("PCoA2 (", round(100 * pcoa$eig[2] / sum(pcoa$eig), 1), "%)"), cex.axis=0.5)
+# Agregar leyenda debajo del gráfico, más separada del eje x
+legend("bottom", inset = -0.5,
+       legend = levels(group_factor),
+       col = colors, pch = 19,
+       horiz = TRUE, bty = "n", cex = 3, xpd = TRUE)
+```
+Take only the significant results
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../9_Corr_Pathways_MO/")
+# creation of the table for the significant correalations
+
+# 1. Find the positions of all cells with value < 0.05
+idx <- which(results_pval < 0.05, arr.ind = TRUE)
+
+# 2. Build a new data frame with row names, column names, and values
+significant_df <- data.frame(
+  Row = rownames(results_pval)[idx[, 1]],
+  Column = colnames(results_pval)[idx[, 2]],
+  Value = results_tau[idx]
+)
+
+# 3. Inspect the result
+colnames(significant_df) <- c("MO", "Pathways", "Value")
+# save into a table
+library(writexl)
+write_xlsx(significant_df, "MO_corr_path_fungi.xlsx")
+corr_table <- significant_df
+head(corr_table)
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+library(igraph)
+
+significant_df$color <- ifelse(significant_df$Value > 0, "red", "blue")
+
+# Create graph
+g <- graph_from_data_frame(d = significant_df, directed = FALSE)
+node_names <- V(g)$name
+node_type <- ifelse(node_names %in% significant_df$MO, "source", "target")
+V(g)$shape <- ifelse(node_type == "source", "square", "circle")
+V(g)$colour <- ifelse(node_type == "source", "olivedrab1", "orange")
+
+# Define edge weights (inverse of absolute correlation) for layout
+# Higher correlation = shorter edge
+E(g)$weight <- 1 / abs(E(g)$Value)
+
+# Use Fruchterman-Reingold layout with weights (to space nodes better)
+layout_fr <- layout_with_fr(g, weights = E(g)$weight, niter = 1000, grid = "nogrid")
+
+# Plot the network
+plot(g,
+     layout = layout_fr,
+     vertex.label.cex = 0.8,
+     vertex.label.font = 2.3,
+     vertex.label.color = "black",
+     vertex.size = 13,
+     vertex.color = V(g)$colour,
+     edge.color = E(g)$color,
+     vertex.shape = V(g)$shape,
+     main = "Microbe-Metabolite Correlation Network")
+
+# Correlation legend
+legend(x = 1.2, y = 0.8,
+       legend = c("Positive correlation", "Negative correlation"),
+       col = c("red", "blue"), lty = 1, lwd = 3, cex = 0.8, bty = "n",
+       seg.len = 1)
+
+# Node type legend
+legend("bottomright",
+       legend = c("Source", "Target"),
+       pch = 21,                     # filled circle
+       pt.bg = c("olivedrab1", "orange"), 
+       pt.cex = 1.5, bty = "n",
+       inset = c(0.1, 0))           # move slightly left
+
+```
+Here we can identify hubs, degree centrality ecc...
+
+Correlation pathways - MO (bacteria)
+# Filter only specific species that belong to the "Eukaryota" kingdom
+```{r pressure, echo=FALSE, warning=FALSE}
+bacteria_t0t1 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t0vst1/bacteria_t0vst1.xlsx")
+bacteria_t1t2 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t1vst2/bacteria_t1vst2.xlsx")
+bacteria_t2t3 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t2vst3/bacteria_t2vst3.xlsx")
+bacteria_t3t5 <- read_excel(".../4_DA_pairwise_w_t/ENRICHED/t3vst5/bacteria_t3vst5.xlsx")
+tot_bacteria <- c(bacteria_t0t1$feature, bacteria_t1t2$feature, bacteria_t2t3$feature, bacteria_t3t5$feature)
+length(tot_bacteria)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+# take from the table_MO only this 65 euakryota
+table_MO_new <- table_MO[, (names(table_MO) %in% tot_bacteria)]
+dim(table_MO_new)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+library(pheatmap)
+library(RColorBrewer)
+setwd(".../9_Corr_Pathways_MO/")
+getwd()
+# 3. Initialize a matrix to store results
+# Correct dimensions
+results_tau  <- matrix(NA, nrow = ncol(table_MO_new), ncol = ncol(t_data_path_new))
+results_pval <- matrix(NA, nrow = ncol(table_MO_new), ncol = ncol(t_data_path_new))
+
+# Optional: add row/col names for clarity
+rownames(results_tau)  <- colnames(table_MO_new)
+colnames(results_tau)  <- colnames(t_data_path_new)
+rownames(results_pval) <- colnames(table_MO_new)
+colnames(results_pval) <- colnames(t_data_path_new)
+
+#otu_avg <- otu_avg[, colnames(otu_avg) %in% cols_to_keep]
+
+# 4. Loop over all compound-microbe pairs and compute Kendall's tau
+for (i in seq_len(ncol(table_MO_new))) {
+  for (j in seq_len(ncol(t_data_path_new))) {
+    x <- as.numeric(as.character(table_MO_new[, i]))
+    y <- as.numeric(as.character(t_data_path_new[, j]))
+    test_result <- cor.test(x, y, method = "spearman", use = "pairwise.complete.obs")
+    results_tau[i, j]  <- test_result$estimate
+    results_pval[i, j] <- test_result$p.value
+  }
+}
+
+# 5. Convert to data frame if needed
+results_df <- as.data.frame(results_tau)
+write.table(results_df, "spearman_correlation_bacteria_path.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+
+results_clean <- results_df
+results_clean[is.na(results_clean)] <- 0
+#results_clean[is.infinite(results_clean)] <- 0
+
+pheatmap(results_clean,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         main = "Kendall Correlation Heatmap",
+         fontsize = 4,            # overall font size
+         fontsize_row = 5,        # row labels (e.g., metabolites)
+         fontsize_col = 5)
+
+# Paleta sobria de colores
+n_groups <- length(unique(groups))
+colors <- brewer.pal(n = max(3, min(n_groups, 8)), name = "Set1")
+# Ajustar márgenes para espacio extra abajo
+par(mar = c(6, 4, 4, 2))  # más espacio en margen inferior
+# Gráfico con puntos coloreados por grupo
+groups <- sub("R[0-9]+$", "", rownames(pcoa$points))
+group_factor <- factor(groups)
+plot(pcoa$points[,1], pcoa$points[,2],
+     col = colors[group_factor], pch = 19,
+     xlab = paste0("PCoA1 (", round(100 * pcoa$eig[1] / sum(pcoa$eig), 1), "%)"),
+     ylab = paste0("PCoA2 (", round(100 * pcoa$eig[2] / sum(pcoa$eig), 1), "%)"), cex.axis=0.5)
+# Agregar leyenda debajo del gráfico, más separada del eje x
+legend("bottom", inset = -0.5,
+       legend = levels(group_factor),
+       col = colors, pch = 19,
+       horiz = TRUE, bty = "n", cex = 3, xpd = TRUE)
+```
+
+Take only the significant results
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../9_Corr_Pathways_MO/")
+# creation of the table for the significant correalations
+
+# 1. Find the positions of all cells with value < 0.05
+idx <- which(results_pval < 0.05, arr.ind = TRUE)
+
+# 2. Build a new data frame with row names, column names, and values
+significant_df <- data.frame(
+  Row = rownames(results_pval)[idx[, 1]],
+  Column = colnames(results_pval)[idx[, 2]],
+  Value = results_tau[idx]
+)
+
+# 3. Inspect the result
+colnames(significant_df) <- c("MO", "Pathways", "Value")
+# save into a table
+library(writexl)
+write_xlsx(significant_df, "MO_corr_path_bacteria.xlsx")
+corr_table <- significant_df
+head(corr_table)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+library(igraph)
+
+corr_table$color <- ifelse(corr_table$Value > 0, "red", "blue")
+
+# Create graph
+g <- graph_from_data_frame(d = corr_table, directed = FALSE)
+node_names <- V(g)$name
+node_type <- ifelse(node_names %in% corr_table$MO, "source", "target")
+V(g)$shape <- ifelse(node_type == "source", "square", "circle")
+V(g)$colour <- ifelse(node_type == "source", "olivedrab1", "orange")
+
+# Define edge weights (inverse of absolute correlation) for layout
+# Higher correlation = shorter edge
+E(g)$weight <- 1 / abs(E(g)$Value)
+
+# Use Fruchterman-Reingold layout with weights (to space nodes better)
+layout_fr <- layout_with_fr(g, weights = E(g)$weight, niter = 1000, grid = "nogrid")
+
+# Plot the network
+plot(g,
+     layout = layout_fr,
+     vertex.label.cex = 0.8,
+     vertex.label.font = 2.3,
+     vertex.label.color = "black",
+     vertex.size = 13,
+     vertex.color = V(g)$colour,
+     edge.color = E(g)$color,
+     vertex.shape = V(g)$shape,
+     main = "Microbe-Metabolite Correlation Network")
+
+# Correlation legend
+legend(x = 1.2, y = 0.8,
+       legend = c("Positive correlation", "Negative correlation"),
+       col = c("red", "blue"), lty = 1, lwd = 3, cex = 0.8, bty = "n",
+       seg.len = 1)
+
+# Node type legend
+legend("bottomright",
+       legend = c("Source", "Target"),
+       pch = 21,                     # filled circle
+       pt.bg = c("olivedrab1", "orange"), 
+       pt.cex = 1.5, bty = "n",
+       inset = c(0.1, 0))           # move slightly left
+
+```
+
+Exploration of the correlations
+Fungi
+```{r pressure, echo=FALSE, warning=FALSE}
+fungi_path <- read_excel(".../9_Corr_Pathways_MO/MO_corr_path_fungi.xlsx")
+head(fungi_path)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+unique(fungi_path$MO)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+filtered_fungi <- fungi_path %>%
+  filter(MO %in% c("Saccharomyces eubayanus", "Saccharomyces mikatae"))
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+filtered_fungi <- fungi_path %>%
+  filter(MO %in% c("Kwoniella botswanensis", "Kwoniella bestiolae", "Kwoniella newhampshirensis"))
+filtered_fungi
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+bact_path <- read_excel(".../9_Corr_Pathways_MO/MO_corr_path_bacteria.xlsx")
+head(bact_path)
+```

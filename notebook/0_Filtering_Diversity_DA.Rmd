@@ -1,0 +1,3658 @@
+---
+title: "r_Savorgnano"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-06-18"
+---
+
+## Setting directory
+```{r set dir, include=FALSE}
+setwd("PATH/WHERE/YOU/HAVE/THE/ABUNDANCE/TABLE")
+getwd()
+```
+
+## Loading packages
+```{r Loading packages, warning=FALSE,message=FALSE}
+library(pheatmap)
+library(vegan)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(phyloseq)
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(DESeq2)
+library(ANCOMBC)
+library(RColorBrewer)
+library(Maaslin2)
+library(circlize) # for chord plot
+library(Hmisc)
+library(scales)
+```
+
+## Preparation of the table
+```{r Import and Pre-filtering, echo=FALSE}
+tab <-read_excel("Abundance_Table.xlsx", col_names=TRUE) # table containing as first column the MO and the others the different samples
+tab_df <- as.data.frame(tab) # convert the table in dataframe
+trans <- t(tab) # transpose the table i.e. MO on the columns and the different samples on the rows
+names <- trans[1,] # in the first row there are all the MO names
+header.true <- function(trans) {names(trans) <- as.character(unlist(trans[1,]))
+trans[-1,]} # function take the first row of the table and put it as column names of the table, and after that delete the first row
+new <- header.true(trans) # apply the function to the table and save the table in another variable
+names_samples <- colnames(tab_df) # save the column names of the dataframe (sample names) into the variable names_samples
+names_samples_new <- names_samples[-1] # delete the name of the first column that contains the name of the microorganisms
+
+df_new <- data.frame(apply(new, 2, function(x) as.numeric(as.character(x)))) # convert the cells of the dataframe in numeric type
+rownames(df_new) <- names_samples_new # change row names with the name of the samples
+colnames(df_new) <- tab_df$name # change column names with the name of the MOs
+
+dim(df_new)
+head(df_new)
+```
+
+## Exploration of the dataset
+Take only wine samples
+```{r Filtering, echo=FALSE}
+rows_to_keep <- c("T0R1", "T0R2", "T0R3", 
+                "T1R1", "T1R2", "T1R3",
+                "T2R1", "T2R2", "T2R3",
+                "T3R1", "T3R2", "T3R3",
+                "T5R2", "T5R3") # subset the total table
+
+df_new <- df_new[rownames(df_new) %in% rows_to_keep, ] # take only wine samples
+original_colnames <- colnames(df_new) # we have to store the colnames
+# because the next function converts the conames with a point where there is a space
+df_new <- data.frame(apply(df_new, 2, function(x) as.numeric(as.character(x))))
+colnames(df_new) <- original_colnames
+
+# important to use the count table, not the relative abundance table
+# 1. Removing on the base of prevalence and abundance in samples
+taxa_prevalence <- colSums(df_new > 0) # number of samples in which a taxon is present (vector of taxa-number values)
+taxa_abundance <- colSums(df_new) # total number of counts of a taxon across all samples (vector of taxa-number values)
+
+# plot prevalence histogram
+ggplot(data.frame(prevalence = taxa_prevalence), aes(x = prevalence)) +
+  geom_histogram(binwidth = 1, fill = "#69b3a2", color = "black") +
+  labs(title = "Taxon Prevalence", x = "Number of Samples", y = "Number of Taxa") +
+  theme_minimal()
+
+# plot abundance histogram, number of reads found in each microorganism in the all the samples
+ggplot(data.frame(log_abundance = log10(taxa_abundance + 1)), aes(x = log_abundance)) +
+  geom_histogram(binwidth = 0.2, fill = "#ff9966", color = "black") +
+  labs(title = "Log‑transformed Taxon Abundance",
+       x = "log10(Total Counts per Taxon + 1)",
+       y = "Number of Taxa") +
+  theme_minimal() +
+  scale_x_continuous(labels = label_number(accuracy = 0.1))  # adjust accuracy or decimal places
+```
+
+```{r Filtering, echo=FALSE}
+mean_prevalence <- mean(taxa_prevalence)
+median_prevalence <- median(taxa_prevalence)
+sd_prevalence <- sd(taxa_prevalence)
+df_prev <- data.frame(mean_prevalence, median_prevalence, sd_prevalence)
+print(df_prev)
+```
+
+```{r Filtering, echo=FALSE}
+log_abundance = log10(taxa_abundance + 1)
+mean_log_abundance <- mean(log_abundance)
+median_log_abundance <- median(log_abundance)
+sd_log_abundance <- sd(log_abundance)
+df_ab <- data.frame(mean_log_abundance, median_log_abundance, sd_log_abundance)
+print(df_ab)
+```
+
+Here better to put the values of the distribution for example mean, median, mode values in a table
+
+```{r Filtering, echo=FALSE}
+# 2. Remove samples (rows) with low total counts
+# Filter out samples with total count < 1,000
+filt_tab <- df_new[rowSums(df_new) >= 1000, ] # take only the rows that have more or equal than 1000 reads
+init <- dim(df_new)
+fin <- dim(filt_tab)
+print(paste("The initial dimension of the table was:", init, "The final dimension of the table is: ", fin))
+```
+
+Additional filter applied: take only those microorganisms that have at least one read in all the three replicates for at least one sample
+```{r Filter Prevalence, echo=FALSE}
+rownames(filt_tab) <- c("T0R1", "T0R2", "T0R3", 
+                "T1R1", "T1R2", "T1R3",
+                "T2R1", "T2R2", "T2R3",
+                "T3R1", "T3R2", "T3R3",
+                "T5R2", "T5R3")
+filt_tab$Sample_Group <- sub("R[0-9]+", "", rownames(filt_tab)) # add the column Sample_group column in the table, that have the information of the sample
+
+# Get list of microrganisms columns (i.e. , exclude Sample_Group column)
+microbe_cols <- setdiff(names(filt_tab), "Sample_Group") # put in a vector the names of the microorganisms
+
+# Initialize vector to store valid microbes
+valid_microbes <- c() # store valid microorganisms into a vector
+
+# Loop through each microbe, and take only the microbes that have at least one read in all the three replicates
+for (microbe in microbe_cols) { # loop over the microorganisms in the vector
+  # for each sample group, check if all replicates have > 0 for this microbe
+  valid <- tapply(filt_tab[[microbe]] > 0, filt_tab$Sample_Group, all) # apply the function that all the rows belonging to the same sample group have to be more than 0 for a given microbe
+ 
+  # If any group meets the condition, add the microbe
+  if (any(valid, na.rm = TRUE)) {
+    valid_microbes <- c(valid_microbes, microbe)
+  }
+}
+
+# Filter dataframe to keep only valid microbes
+filt_tab <- filt_tab[, valid_microbes] # take only the microbes that have at least one read in all the three replicates
+dim(filt_tab)
+```
+
+Save this table in an another excel file because it is useful when we will compute the correlation between pathways and metabolites
+
+After filtering for the microorganisms that have at least one read in all the three replicates, 
+we end up with only 697 microorganisms
+
+```{r Sequencing depth across samples, echo=FALSE}
+setwd("Correlation_pathways_MO")
+library(writexl)
+filt_tab$RowNames <- rownames(filt_tab)
+write_xlsx(filt_tab, "table_MO.xlsx")
+dim(filt_tab)
+```
+
+```{r Sequencing depth across samples, echo=FALSE}
+# are the samples balanced?
+# 1. compute sequencing depth per sample
+filt_tab <- as.data.frame(filt_tab)
+filt_tab[] <- lapply(filt_tab, function(x) as.numeric(as.character(x)))
+sample_depths <- rowSums(filt_tab, na.rm=TRUE) # for each sample sum all the reads 
+# 2. visualize sequencing depth
+df <- data.frame(sample = rownames(filt_tab), depth = sample_depths) # creation of a dataframe that has all the samples names and the sequencing depth
+ggplot(df, aes(x = "", y = depth)) +  # creation of a graph containing the depth as y
+  geom_boxplot() +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  labs(title = "Sequencing Depth Across Samples", y = "Total Reads")
+
+# 3. summary statistics, containing the mean, median, the range of the depth 
+mean_depth <- mean(sample_depths)
+median_depth <- median(sample_depths)
+range_depth <- range(sample_depths)
+cv_depth <- sd(sample_depths) / mean_depth # coefficient of variation of the depth measurements
+# cv is a statistic used to describe how variable a set of numbers is relative to their mean
+cat("Mean:", mean_depth, "\nMedian:", median_depth, "\nRange:", range_depth, "\nCV:", cv_depth, "\n")
+```
+Very wide range of sequencing depth.
+
+Difference between Alpha diversity measured by Observed, Shannon and Simpson; and the richness value
+- Observed/Richness: how many different species are present in each sample (richness).
+- Shannon: measures both richness and evenness. A sample with many equally abundant species has high Shannon diversity.
+- Simpson: measures both dominance/evenness. Gives more weight to dominant species. If one species dominates, diversity drops sharply.
+
+-> richness: how many different species (or OTUs/ASVs) are present
+-> evenness: how evenly the individuals* are distributed among those species
+
+* individual = one read, sequence, or microbial count attributed to a specific OTU or ASV within that sample
+
+## 2. Alpha diversity
+```{r Wine samples between time points, echo=FALSE}
+# since the samples are not balanced, before we have to rarefy the table 
+# to compute the alpha diversity, but is possible to use the count table as it is
+# (as we are going to do below),
+# for beta diversity is suggested to simply normalize and not rarefy the table
+metadata_w <- data.frame(
+  sample_id = c("T0R1", "T0R2", "T0R3", 
+                "T1R1", "T1R2", "T1R3",
+                "T2R1", "T2R2", "T2R3",
+                "T3R1", "T3R2", "T3R3",
+                "T5R2", "T5R3"),
+  timepoint = c("T0", "T0", "T0", 
+                "T1", "T1", "T1", 
+                "T2", "T2", "T2", 
+                "T3", "T3", "T3", 
+                "T5", "T5")
+  # assign the time point to the specific sample
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+
+# assign as row names of filt_tab the samples that are present in metadata
+# rename the table into sub_w since it is the variable that we will use later
+sub_w <- filt_tab
+rownames(sub_w) <- rownames(metadata_w)
+
+otu <- otu_table(as.matrix(sub_w), taxa_are_rows = FALSE)
+sample_data <- sample_data(metadata_w)
+ps <- phyloseq(otu, sample_data)
+otu_table(ps)[is.na(otu_table(ps))] <- 0
+alpha_df <- estimate_richness(ps, measures = c("Observed", "Shannon", "Simpson"))
+alpha_df$timepoint <- sample_data(ps)$timepoint
+
+ggplot(alpha_df, aes(x = timepoint, y = Observed)) +
+  geom_boxplot(fill = "#69b3a2") +
+  geom_jitter(width = 0.1, size = 2, alpha = 0.7) +
+  labs(title = "Observed Diversity across Time Points in Wine samples")
+
+ggplot(alpha_df, aes(x = timepoint, y = Shannon)) +
+  geom_boxplot(fill = "#69b3a2") +
+  geom_jitter(width = 0.1, size = 2, alpha = 0.7) +
+  labs(title = "Shannon Diversity across Time Points in Wine samples")
+
+ggplot(alpha_df, aes(x = timepoint, y = Simpson)) +
+  geom_boxplot(fill = "#69b3a2") +
+  geom_jitter(width = 0.1, size = 2, alpha = 0.7) +
+  labs(title = "Simpson Diversity across Time Points in Wine samples")
+
+kruskal.test(Observed ~ timepoint, data = alpha_df) # statistical significance difference between times
+
+kruskal.test(Shannon ~ timepoint, data = alpha_df) # statistical significance difference between times
+
+kruskal.test(Simpson ~ timepoint, data = alpha_df) # statistical significance difference between times
+```
+? better to explain why we used this type of test (kruskal-wallis) and not other
+
+Rewise the database in input of the alpha diversity and the microbial richness
+```{r Microbial richness in Wine at the different time points, echo=FALSE}
+# another way to represent: Observed OTUs vs Fermentation stage
+# compute Richness (observed OTUs, number of non-zero OTUs per sample)
+sub_w[is.na(sub_w)] <- 0
+richness <- specnumber(sub_w) # number of counts for each sample (row)
+richness_df <- metadata_w %>% mutate(Richness = richness) # creation of a column in the table metadata
+# in order to add the counts for each sample
+# plot richness across time points
+ggbarplot(richness_df, x = "timepoint", y = "Richness",
+          add = "mean_sd",
+          fill = "timepoint",
+          palette = "jco",
+          x.text.angle = 45,
+          ylab = "Observed OTUs",
+          xlab = "Stage of Fermentation",
+          title = "Microbial Richness by Stage")
+```
+
+INTERPRETATION:
+
+It could be noted that at Time T0 in the richness and Observed alpha diversity plot, the height of the boxplots follows the same pattern, as expected. So from time T0 to T5 the richness in species is initially low at time T0, reaches the peak at time T1 and decreases from time T1 to time T5; in particular at time T5 we have the lowest amount of richness.
+
+In the Shannon and Simpson diversity the pattern is different in particular at time T0, respect to the graphs previously described. Because in TO we have the highest point and after that there is a decrease, reaching the lowest point in T5. It could be explained with the fact that although in T0 the richness is the highest, the evenness lowers the value of the boxplot (so the individuals are distributed in a way that is not even among those species)
+
+
+```{r Test richness, echo=FALSE}
+# rewise why we used this test
+anova_res <- aov(Richness ~ timepoint, data = richness_df)
+TukeyHSD(anova_res)
+```
+Explain why you use this test and not others
+
+The null values are not in all the column of the row but only in some columns
+
+Relative abundance of bacteria divided by family, 
+in bacteria, fungi and yeast
+
+```{r Relative abundance by family, echo=FALSE}
+# creation of the otu table, starting from the sub_w table
+otu <- otu_table(as.matrix(sub_w), taxa_are_rows = FALSE) # transform into otu table
+# read the taxonomy_table
+tab_taxa <- read_excel("taxonomy_bracken.xlsx")
+# remove duplicated species in the table
+tab_taxa_unique <- tab_taxa %>%
+  distinct(species, .keep_all = TRUE)
+dim(tab_taxa)
+dim(tab_taxa_unique)
+rownames(tab_taxa_unique) <- tab_taxa_unique$species
+```
+
+```{r Relative abundance by family, echo=FALSE}
+keep_names <- colnames(sub_w)
+tab_taxa_in_otu <- tab_taxa_unique[rownames(tab_taxa_unique) %in% keep_names, ]
+rownames(tab_taxa_in_otu) <- tab_taxa_in_otu$species
+dim(tab_taxa_in_otu)
+tab_taxa_in_otu <- tab_taxa_in_otu[, c(setdiff(names(tab_taxa_in_otu), "species"), "species")]
+```
+```{r Relative abundance by family, echo=FALSE}
+rownames(tab_taxa_in_otu) <- tab_taxa_in_otu$species
+```
+
+### Abundance of MO
+## Family of Saccharomycetaceae
+```{r Relative abundance by family, echo=FALSE}
+taxa <- tax_table(as.matrix(tab_taxa_in_otu)) # transform the name of the taxa into an object tax_table in order to give it to the phyloseq function
+sample_data <- sample_data(metadata_w) # transform into sample_data table
+# assigning to the ps variable the phyloseq object containing
+# otu table, taxa and sample data
+ps <- phyloseq(otu, taxa, sample_data) # building of a phyloseq object
+
+# 2. aggregate to desidered taxonomic level
+# at family level (or genus if more appropriate)
+# we decide to use family because we have an high amount of MO, and maybe is better to rank by family
+ps_family <- tax_glom(ps, taxrank = "family") # using the function of the phyloseq object
+
+# 3. transform to relative abundance, i.e. counts divided for sum of the counts
+ps_relabund <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+# 4. Prune Low-Abundance taxa
+# Convert data frame to long format for filtering
+df <- psmelt(ps_relabund)
+
+# We decide consider for now only Saccharomycetaceae
+keep_taxa <- "Saccharomycetaceae"
+
+# Filter the phyloseq object 
+df_filtered <- df %>% filter(family %in% keep_taxa) # keep only Saccharomycetaceae family, because now we are looking at Saccharomyces yeast
+
+# Summarize by timepoint and family
+# average relative abundance per family per timepoint
+df_summary <- df_filtered %>%
+  group_by(timepoint, family) %>% # group the df_filtered table by timepoint and family
+  summarise(mean_abundance = mean(Abundance, na.rm = TRUE), # and create a barplot
+            sd_abundance=sd(Abundance, na.rm = TRUE),
+            .groups = "drop")
+
+
+abund_fam_sacch <- ggplot(df_summary, aes(x = timepoint, y = mean_abundance, color = family, group = family)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance, ymax = mean_abundance + sd_abundance), 
+                width = 0.2, size = 0.8) +
+  theme_minimal() +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Family"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+png("Saccharomycetac_abundance.png", width = 2000, height = 1500, res = 300)  # 300 dpi is print-quality
+plot(abund_fam_sacch)
+```
+
+## Saccharomyces cerevisiae
+```{r Relative abundance by family, echo=FALSE}
+taxa <- tax_table(as.matrix(tab_taxa_in_otu)) # transform the name of the taxa into an object tax_table in order to give it to the phyloseq function
+sample_data <- sample_data(metadata_w) # transform into sample_data table
+# assigning to the ps variable the phyloseq object containing
+# otu table, taxa and sample data
+ps <- phyloseq(otu, taxa, sample_data) # building of a phyloseq object
+
+# 2. aggregate to desidered taxonomic level
+# at family level (or genus if more appropriate)
+# we decide to use family because we have an high amount of MO, and maybe is better to rank by family
+ps_family <- tax_glom(ps, taxrank = "species") # using the function of the phyloseq object
+
+# 3. transform to relative abundance, i.e. counts divided for sum of the counts
+ps_relabund <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+# 4. Prune Low-Abundance taxa
+# Convert data frame to long format for filtering
+df <- psmelt(ps_relabund)
+
+# We decide consider for now only Saccharomycetaceae
+keep_taxa <- "Saccharomyces cerevisiae"
+
+# Filter the phyloseq object 
+df_filtered <- df %>% filter(species %in% keep_taxa) # keep only Saccharomycetaceae family, because now we are looking at Saccharomyces yeast
+
+# Summarize by timepoint and family
+# average relative abundance per family per timepoint
+df_summary <- df_filtered %>%
+  group_by(timepoint, species) %>% # group the df_filtered table by timepoint and family
+  summarise(mean_abundance = mean(Abundance, na.rm = TRUE), # and create a barplot
+            sd_abundance=sd(Abundance, na.rm = TRUE),
+            .groups = "drop")
+
+
+abund_sacch <- ggplot(df_summary, aes(x = timepoint, y = mean_abundance, color = species, group = species)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance, ymax = mean_abundance + sd_abundance), 
+                width = 0.2, size = 0.8) +
+  theme_minimal() +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Species"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+png("Saccharomyces_abundance.png", width = 2000, height = 1500, res = 300)  # 300 dpi is print-quality
+dev.off()
+plot(abund_sacch)
+```
+
+If we look into microbial dynamics during fermentation, in wine, there is a very high amount of Saccharomycetaceae that are present in high amount and increase their abundance, and reach a steady state at the final time T5. 
+To the Saccharomycetaceae belong Saccharomyces cerevisiae and other MO.
+
+## Family of Yeast
+```{r Relative abundance by family, echo=FALSE}
+# look at the paper, and to group into genus use the taxonomy table created later with the package taxize
+# 1. otu, sample_data, taxonomy (otu and sample_data we already have, taxonomy is not present)
+# we have to create the taxonomy table with only the microorganisms present in the otu table
+final_taxa <- read_excel("taxonomy_bracken.xlsx")
+otu_taxa <- colnames(sub_w)
+taxa_filt <- final_taxa[otu_taxa, , drop = FALSE]
+# put as rownames of final_taxa the species
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps <- phyloseq(otu, taxa, sample_data)
+
+# 2. aggregate to desidered taxonomic level
+# at family level (or genus if more appropriate)
+# we decide to use family because we have an high amount of MO, and maybe is better to rank by family
+ps_family <- tax_glom(ps, taxrank = "family")
+
+# 3. transform to relative abundance
+ps_relabund <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+# 4. Prune Low-Abundance taxa
+# Convert to data frame to long format for filtering
+df <- psmelt(ps_relabund)
+
+# Get taxa with ≥1% in at least one sample, filter to keep only most abundant families
+keep_taxa <- df %>%
+ group_by(Taxon = family) %>%
+ summarise(max_abundance = max(Abundance), .groups = "drop") %>% 
+ filter(max_abundance >= 0.01) %>%
+ pull(Taxon)
+
+# now we keep all the families, including the one of Saccharomices cerevisiae (Saccharomycetaceae)
+
+keep_taxa <- "Eukaryota"
+
+# Filter the phyloseq object 
+df_filtered <- df %>% filter(kingdom %in% keep_taxa)
+
+# take away the "Chordata" phylum and the "Saccharomycetaceae" family
+df_filtered <- df_filtered %>%
+  filter(!(phylum == "Chordata" | family == "Saccharomycetaceae"))
+
+# we remove this families since t
+mold_families <- c(
+  "Sclerotiniaceae",
+  "Mycosphaerellaceae",
+  "Aspergillaceae",
+  "Nectriaceae",
+  "Didymellaceae",
+  "Pleosporaceae",
+  "Clavicipitaceae",
+  "Glomerellaceae",
+  "Hypocreaceae",
+  "Sordariaceae",
+  "Marasmiaceae",
+  "Ustilaginaceae",
+  "Pucciniaceae",
+  "Ophiocordycipitaceae",
+  "Ceratobasidiaceae",
+  "Chaetomiaceae",
+  "Strophariaceae",
+  "Glomeraceae"
+)
+
+df_filtered <- df_filtered %>%
+  filter(family %in% mold_families)
+
+# Summarize by timepoint and family
+# average relative abundance per family per timepoint
+df_summary <- df_filtered %>%
+  group_by(timepoint, family) %>%
+  summarise(mean_abundance = mean(Abundance),
+            sd_abundance=sd(Abundance, na.rm = TRUE),
+            .groups = "drop")
+df_summary <- df_summary[!(df_summary$mean_abundance == 0 & df_summary$sd_abundance == 0), ]
+
+# 
+abund_yeast <- ggplot(df_summary, aes(x = timepoint, y = mean_abundance, color = family, group = family)) +
+  geom_line(size = 0.8) +
+  geom_point(size = 1.5) +
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance, ymax = mean_abundance + sd_abundance),
+                width = 0.15, size = 0.6) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_minimal(base_size = 10) +  # smaller base font size
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.text = element_text(size = 8),     # smaller legend text
+    legend.title = element_text(size = 9),
+    legend.key.size = unit(0.4, "cm"),        # smaller legend keys
+    plot.margin = margin(10, 10, 10, 10)      # tighter margins
+  ) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Family"
+  )
+
+png("Yeast_non_saccharomyces.png", width = 1200, height = 900, res = 200)  # 300 dpi is print-quality
+plot(abund_yeast)
+dev.off()
+plot(abund_yeast)
+```
+WINE RELEVANT GENERA
+```{r Relative abundance by genus, echo=FALSE}
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(forcats)
+library(scales)
+library(grid)   # for unit()
+
+# 1. Build phyloseq object
+final_taxa <- read_excel("taxonomy_bracken.xlsx")
+otu_taxa   <- colnames(sub_w)
+taxa_filt  <- final_taxa[otu_taxa, , drop = FALSE]
+
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps   <- phyloseq(otu, taxa, sample_data)
+
+# 2. Aggregate to desired taxonomic level: GENUS
+ps_genus <- tax_glom(ps, taxrank = "genus")
+
+# 3. Transform to relative abundance
+ps_relabund <- transform_sample_counts(ps_genus, function(x) x / sum(x))
+
+# 4. Long format
+df <- psmelt(ps_relabund)
+
+# 5. Keep only eukaryotes (fungi) and remove Chordata
+df_filtered <- df %>%
+  filter(kingdom == "Eukaryota") %>%
+  filter(phylum != "Chordata")
+
+# 6. Define non-Saccharomyces genera you want to follow
+
+wine_relevant_genera <- c(
+  "Saccharomycodes",
+  "Brettanomyces",
+  "Candida",
+  "Debaryomyces",
+  "Lodderomyces",
+  "Ogataea",
+  "Pichia",
+  "Scheffersomyces",
+  "Schizosaccharomyces",
+  "Yamadazyma"
+)
+
+df_filtered <- df_filtered %>%
+  filter(genus %in% wine_relevant_genera)
+
+# 7. Summarise by timepoint and genus
+df_summary <- df_filtered %>%
+  group_by(timepoint, genus) %>%
+  summarise(
+    mean_abundance = mean(Abundance),
+    sd_abundance   = sd(Abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(!(mean_abundance == 0 & sd_abundance == 0))
+
+# 8. (Optional) order genera by overall abundance for a nicer legend
+df_summary <- df_summary %>%
+  group_by(genus) %>%
+  mutate(total_abundance = sum(mean_abundance)) %>%
+  ungroup() %>%
+  mutate(genus = fct_reorder(genus, total_abundance, .desc = TRUE))
+
+# 9. Line plot with error bars for each genus
+abund_yeast_genus <- ggplot(df_summary,
+                            aes(x = timepoint,
+                                y = mean_abundance,
+                                colour = genus,
+                                group = genus)) +
+  geom_line(size = 0.8) +
+  geom_point(size = 1.5) +
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.15,
+                size = 0.6) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x  = element_text(angle = 45, hjust = 1),
+    legend.text  = element_text(size = 8),
+    legend.title = element_text(size = 9),
+    legend.key.size = unit(0.4, "cm"),
+    plot.margin  = margin(10, 10, 10, 10)
+  ) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    colour = "Genus"
+  )
+
+# 10. Save plot
+png("Yeast_non_saccharomyces_genus_wine.png",
+    width = 1200, height = 900, res = 200)
+plot(abund_yeast_genus)
+dev.off()
+
+# Show in RStudio
+plot(abund_yeast_genus)
+```
+
+yeast non-sacch - non oenological
+```{r Relative abundance by genus, echo=FALSE}
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(forcats)
+library(scales)
+library(grid)   # for unit()
+
+# 1. Build phyloseq object
+final_taxa <- read_excel("taxonomy_bracken.xlsx")
+otu_taxa   <- colnames(sub_w)
+taxa_filt  <- final_taxa[otu_taxa, , drop = FALSE]
+
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps   <- phyloseq(otu, taxa, sample_data)
+
+# 2. Aggregate to desired taxonomic level: GENUS
+ps_genus <- tax_glom(ps, taxrank = "genus")
+
+# 3. Transform to relative abundance
+ps_relabund <- transform_sample_counts(ps_genus, function(x) x / sum(x))
+
+# 4. Long format
+df <- psmelt(ps_relabund)
+
+# 5. Keep only eukaryotes (fungi) and remove Chordata
+df_filtered <- df %>%
+  filter(kingdom == "Eukaryota") %>%
+  filter(phylum != "Chordata") %>%
+  filter(genus != "Saccharomyces")
+
+wine_relevant_genera <- c(
+  "Saccharomycodes",
+  "Brettanomyces",
+  "Candida",
+  "Debaryomyces",
+  "Lodderomyces",
+  "Ogataea",
+  "Pichia",
+  "Scheffersomyces",
+  "Schizosaccharomyces",
+  "Yamadazyma"
+)
+
+df_filtered <- df_filtered %>%
+  filter(!genus %in% wine_relevant_genera)
+
+# 7. Summarise by timepoint and genus
+df_summary <- df_filtered %>%
+  group_by(timepoint, genus) %>%
+  summarise(
+    mean_abundance = mean(Abundance),
+    sd_abundance   = sd(Abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(!(mean_abundance == 0 & sd_abundance == 0))
+
+# 8. (Optional) order genera by overall abundance for a nicer legend
+df_summary <- df_summary %>%
+  group_by(genus) %>%
+  mutate(total_abundance = sum(mean_abundance)) %>%
+  ungroup() %>%
+  mutate(genus = fct_reorder(genus, total_abundance, .desc = TRUE))
+
+# 9. Line plot with error bars for each genus
+abund_yeast_genus <- ggplot(df_summary,
+                            aes(x = timepoint,
+                                y = mean_abundance,
+                                colour = genus,
+                                group = genus)) +
+  geom_line(size = 0.8) +
+  geom_point(size = 1.5) +
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.15,
+                size = 0.6) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x  = element_text(angle = 45, hjust = 1),
+    legend.text  = element_text(size = 5),
+    legend.title = element_text(size = 9),
+    legend.key.size = unit(0.4, "cm"),
+    plot.margin  = margin(10, 10, 10, 10)
+  ) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    colour = "Genus"
+  )
+
+# 10. Save plot
+png("Yeast_non_saccharomyces_genus_no_oeno.png",
+    width = 1200, height = 900, res = 200)
+plot(abund_yeast_genus)
+dev.off()
+
+# Show in RStudio
+plot(abund_yeast_genus)
+```
+
+Bacteria FAMILY - overall
+```{r }
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(scales)
+library(readxl)
+
+# 1. Build phyloseq object
+final_taxa <- read_excel("taxonomy_bracken.xlsx")
+otu_taxa   <- colnames(sub_w)
+taxa_filt  <- final_taxa[otu_taxa, , drop = FALSE]
+
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps   <- phyloseq(otu, taxa, sample_data)
+
+# 2. Aggregate at FAMILY level
+ps_family <- tax_glom(ps, taxrank = "genus")
+
+# 3. Transform to relative abundance
+ps_relabund <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+# 4. Melt into long format & keep only bacteria
+df <- psmelt(ps_relabund)
+df_bact <- df %>% filter(kingdom == "Bacteria")
+
+# 5. Identify abundant_families
+keep_taxa <- df %>%
+ group_by(Taxon = family) %>%
+ summarise(max_abundance = max(Abundance), .groups = "drop") %>% 
+ filter(max_abundance >= 0.01) %>%
+ pull(Taxon)
+
+# 7. Keep only these families + group others as "Other"
+df_bact_plot <- df_bact %>%
+  filter(family %in% abundant_families)
+
+# 8. Summarise by timepoint and family (mean ± sd)
+df_bact_summary <- df_bact_plot %>%
+  group_by(timepoint, family) %>%
+  summarise(
+    mean_abundance = mean(Abundance),
+    sd_abundance   = sd(Abundance),
+    .groups = "drop"
+  )
+
+# 9. Order families by total abundance
+df_bact_summary <- df_bact_summary %>%
+  group_by(family) %>%
+  mutate(total_abundance = sum(mean_abundance)) %>%
+  ungroup() %>%
+  mutate(family_plot = fct_reorder(family, total_abundance, .desc = TRUE))
+
+# 10. LINE PLOT (instead of barplot)
+ggplot(df_bact_summary,
+       aes(x = timepoint,
+           y = mean_abundance,
+           color = family,
+           group = family)) +
+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+
+  # error bars
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.15, linewidth = 0.5) +
+
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Bacterial Family"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10)
+  )
+
+png("Bacteria_all_family.png",
+    width = 1200, height = 900, res = 200)
+ggplot(df_bact_summary,
+       aes(x = timepoint,
+           y = mean_abundance,
+           color = family,
+           group = family)) +
+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+
+  # error bars
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.15, linewidth = 0.5) +
+
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Bacterial Family"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10)
+  )
+dev.off()
+```
+wine_relevant_families <- c("Lactobacillaceae", "Acetobacteraceae", "Enterobacteriaceae", "Pseudomonadaceae", "Sphingomonadaceae", "Erwiniaceae", "Pectobacteriaceae", "Comamonadaceae", "Burkholderiaceae", "Flavobacteriaceae", "Microbacteriaceae", "Bacillaceae", "Moraxellaceae", "Hafniaceae", "Yersiniaceae", "Morganellaceae")
+
+Bacteria GENUS - wine relevant
+```{r Relative abundance by family - LINE PLOT, echo=FALSE}
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(scales)
+library(readxl)
+
+# 1. Build phyloseq object
+final_taxa <- read_excel("taxonomy_bracken.xlsx")
+otu_taxa   <- colnames(sub_w)
+taxa_filt  <- final_taxa[otu_taxa, , drop = FALSE]
+
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps   <- phyloseq(otu, taxa, sample_data)
+
+# 2. Aggregate at FAMILY level
+ps_family <- tax_glom(ps, taxrank = "genus")
+
+# 3. Transform to relative abundance
+ps_relabund <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+# 4. Melt into long format & keep only bacteria
+df <- psmelt(ps_relabund)
+df_bact <- df %>% filter(kingdom == "Bacteria")
+
+# 5. Identify abundant families (≥1% in ≥1 sample)
+abundant_families <- df_bact %>%
+  group_by(Taxon = genus) %>%
+  summarise(max_abundance = max(Abundance), .groups = "drop") %>% 
+  filter(max_abundance >= 0.01) %>%
+  pull(Taxon)
+
+# 6. Force-keep wine-relevant families
+wine_relevant <- c(
+
+)
+
+# Families to show
+families_to_show <- union(abundant_families, wine_relevant)
+
+# 7. Keep only these families + group others as "Other"
+df_bact_plot <- df_bact %>%
+  mutate(family_plot = ifelse(family %in% families_to_show, family, "Other"))
+
+# 8. Summarise by timepoint and family (mean ± sd)
+df_bact_summary <- df_bact_plot %>%
+  group_by(timepoint, family_plot) %>%
+  summarise(
+    mean_abundance = mean(Abundance),
+    sd_abundance   = sd(Abundance),
+    .groups = "drop"
+  )
+
+# 9. Order families by total abundance
+df_bact_summary <- df_bact_summary %>%
+  group_by(family_plot) %>%
+  mutate(total_abundance = sum(mean_abundance)) %>%
+  ungroup() %>%
+  mutate(family_plot = fct_reorder(family_plot, total_abundance, .desc = TRUE))
+
+# 10. LINE PLOT (instead of barplot)
+ggplot(df_bact_summary,
+       aes(x = timepoint,
+           y = mean_abundance,
+           color = family_plot,
+           group = family_plot)) +
+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+
+  # error bars
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.15, linewidth = 0.5) +
+
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Bacterial Family"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10)
+  )
+
+png("Bacteria_genus.png",
+    width = 1200, height = 900, res = 200)
+plot(abund_yeast_genus)
+dev.off()
+```
+BACTERIA GENUS - non oenological
+```{r Relativa abundance by Genus, echo=FALSE}
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(scales)
+library(readxl)
+
+# 1. Build phyloseq object
+final_taxa <- read_excel("taxonomy_bracken.xlsx")
+otu_taxa   <- colnames(sub_w)
+taxa_filt  <- final_taxa[otu_taxa, , drop = FALSE]
+
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps   <- phyloseq(otu, taxa, sample_data)
+
+# 2. Aggregate at GENUS level
+ps_genus <- tax_glom(ps, taxrank = "genus")
+
+# 3. Convert counts to relative abundances
+ps_relabund <- transform_sample_counts(ps_genus, function(x) x / sum(x))
+
+# 4. Melt to long format and keep only bacteria
+df <- psmelt(ps_relabund)
+df_bact <- df %>% filter(kingdom == "Bacteria")
+
+# 5. Identify genera with ≥1% relative abundance in at least one sample
+abundant_genera <- df_bact %>%
+  group_by(Taxon = genus) %>%
+  summarise(max_abundance = max(Abundance), .groups = "drop") %>%
+  filter(max_abundance >= 0.01) %>%
+  pull(Taxon)
+
+# 6. Force-keep wine-relevant genera (edit as needed)
+wine_relevant_genera <- c(
+  "Lactobacillus", "Lactiplantibacillus", "Lentilactobacillus",
+  "Oenococcus", "Pediococcus",
+  "Acetobacter", "Gluconobacter",
+  "Pseudomonas", "Sphingomonas",
+  "Erwinia", "Pectobacterium",
+  "Comamonas", "Burkholderia",
+  "Flavobacterium", "Microbacterium",
+  "Bacillus", "Acinetobacter",
+  "Hafnia", "Yersinia", "Morganella"
+)
+
+# 7. Genera we want to plot explicitly
+genera_to_show <- union(abundant_genera, wine_relevant_genera)
+
+# 8. Group all other genera as "Other"
+df_bact_plot <- df_bact %>%
+  mutate(genus_plot = ifelse(genus %in% genera_to_show, genus, "Other"))
+
+# 9. Summarise by timepoint and genus
+df_bact_summary <- df_bact_plot %>%
+  group_by(timepoint, genus_plot) %>%
+  summarise(
+    mean_abundance = mean(Abundance),
+    sd_abundance   = sd(Abundance),
+    .groups = "drop"
+  )
+
+# 10. Order genera by total abundance
+df_bact_summary <- df_bact_summary %>%
+  group_by(genus_plot) %>%
+  mutate(total_abundance = sum(mean_abundance)) %>%
+  ungroup() %>%
+  mutate(genus_plot = fct_reorder(genus_plot, total_abundance, .desc = TRUE))
+
+# 11. Line plot (mean ± SD) for each genus
+ggplot(df_bact_summary,
+       aes(x = timepoint,
+           y = mean_abundance,
+           color = genus_plot,
+           group = genus_plot)) +
+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.15, linewidth = 0.5) +
+
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = "Fermentation Stage",
+    y = "Mean Relative Abundance",
+    color = "Genus"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10)
+  )
+
+```
+
+## Beta diversity
+Check that the three replicates of each sample
+```{r Beta diversity, PCoA, echo=FALSE}
+# PCoA or NMDS plots with biplots
+# identification of top 5 microbial taxa driving community separation
+
+# since most beta diversity metrics (like Bray-Curtis, UniFrac) are sensitive to
+# sequencing depth. Consider:
+# - rarefaction (downsample to even depth) -> common in Bray-Curtis or Jaccard
+# - normalization (relative abundance or centered log-ratio) -> if using Aitchison
+
+# filter the table
+#### 1. beta diversity in Wine at different timings ####
+# we will use the variable metadata_w and the table sub_w
+# we use rarefaction
+sampleAbund <- rowSums(sub_w) # gives the number of individuals found in each sample
+# and we will take the number of the sample with less species
+# rarefy to the minimum sample depth
+min_depth <- min(sampleAbund) # check the minimum of the sample abundance
+rarefied_data <- rrarefy(sub_w, sample=min_depth) # rrarefy generates one randomly rarefied 
+# community data frame or vector of given sample size
+
+# example with Bray-Curtis on rarefied data
+# dissimilarity indices for community ecologists
+beta_div_bray <- vegdist(rarefied_data, method = "bray")
+pcoa <- cmdscale(beta_div_bray, eig = TRUE, k = 2)
+pcoa_df <- as.data.frame(pcoa$points)
+colnames(pcoa_df) <- c("PC1", "PC2")
+pcoa_df$SampleType <- metadata_w$timepoint  # or metadata$Time, etc.
+
+# Calculate percentage variance explained by each axis
+eig <- pcoa$eig
+var_exp <- eig / sum(eig[eig > 0]) * 100
+
+# Create axis labels with percentages
+x_label <- paste0("PC1 (", round(var_exp[1], 1), "%)")
+y_label <- paste0("PC2 (", round(var_exp[2], 1), "%)")
+
+# Plot
+ggplot(pcoa_df, aes(x = PC1, y = PC2, color = SampleType)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "PCoA - Bray-Curtis",
+       x = x_label,
+       y= y_label)
+adonis_res <- adonis2(beta_div_bray ~ timepoint, data = metadata_w)
+print(adonis_res)
+
+# look for each time point if there is significant diversity between the replicates
+#metadata_T0 <- subset(metadata_w, timepoint == "T0")
+#bray_T0 <- beta_div_bray[rownames(metadata_T0), rownames(metadata_T0)]
+
+#metadata_T1 <- subset(metadata_w, timepoint == "T1")
+#bray_T1 <- beta_div_bray[rownames(metadata_T1), rownames(metadata_T1)]
+
+#metadata_T2 <- subset(metadata_w, timepoint == "T2")
+#bray_T2 <- beta_div_bray[rownames(metadata_T2), rownames(metadata_T2)]
+
+#metadata_T3 <- subset(metadata_w, timepoint == "T3")
+#bray_T3 <- beta_div_bray[rownames(metadata_T3), rownames(metadata_T3)]
+
+#metadata_T5 <-subset(metadata_w, timepoint == "T5")
+#bray_T5 <- beta_div_bray[rownames(metadata_T5), rownames(metadata_T5)]
+
+#print(bray_T0)
+#print(bray_T1)
+#print(bray_T2)
+#print(bray_T3)
+#print(bray_T5)
+
+#adonis_res <- adonis2(bray_T0 ~ timepoint, data = metadata_w)
+#adonis_res <- adonis2(bray_T1 ~ timepoint, data = metadata_w)
+#adonis_res <- adonis2(bray_T2 ~ timepoint, data = metadata_w)
+#adonis_res <- adonis2(bray_T3 ~ timepoint, data = metadata_w)
+#adonis_res <- adonis2(bray_T5 ~ timepoint, data = metadata_w)
+```
+
+### Fungi: beta diversity ####
+```{r Beta diversity, PCoA, echo=FALSE}
+# PCoA or NMDS plots with biplots
+# identification of top 5 microbial taxa driving community separation
+
+# since most beta diversity metrics (like Bray-Curtis, UniFrac) are sensitive to
+# sequencing depth. Consider:
+# - rarefaction (downsample to even depth) -> common in Bray-Curtis or Jaccard
+# - normalization (relative abundance or centered log-ratio) -> if using Aitchison
+
+# filter the table considering only the fungi
+final_taxa_eu <- tab_taxa_in_otu[!tab_taxa_in_otu$kingdom %in% c("Bacteria", "Viruses"),] 
+final_taxa_eu <- final_taxa_eu[!final_taxa_eu$species %in% "Homo sapiens",]
+final_taxa_eu <- final_taxa_eu[!is.na(final_taxa_eu)]
+
+common <- intersect(final_taxa_eu, colnames(sub_w))
+sub_w_filtered <- sub_w[, !colnames(sub_w) %in% common]
+#### 1. beta diversity in Wine at different timings ####
+# we will use the variable metadata_w and the table sub_w
+# we use rarefaction
+sampleAbund <- rowSums(sub_w_filtered) # gives the number of individuals found in each sample
+# and we will take the number of the sample with less species
+# rarefy to the minimum sample depth
+min_depth <- min(sampleAbund) # check the minimum of the sample abundance
+rarefied_data <- rrarefy(sub_w_filtered, sample=min_depth) # rrarefy generates one randomly rarefied 
+# community data frame or vector of given sample size
+
+# example with Bray-Curtis on rarefied data
+# dissimilarity indices for community ecologists
+beta_div_bray <- vegdist(rarefied_data, method = "bray")
+pcoa <- cmdscale(beta_div_bray, eig = TRUE, k = 2)
+pcoa_df <- as.data.frame(pcoa$points)
+colnames(pcoa_df) <- c("PC1", "PC2")
+pcoa_df$SampleType <- metadata_w$timepoint  # or metadata$Time, etc.
+
+# Calculate percentage variance explained by each axis
+eig <- pcoa$eig
+var_exp <- eig / sum(eig[eig > 0]) * 100
+
+# Create axis labels with percentages
+x_label <- paste0("PC1 (", round(var_exp[1], 1), "%)")
+y_label <- paste0("PC2 (", round(var_exp[2], 1), "%)")
+
+# Plot
+ggplot(pcoa_df, aes(x = PC1, y = PC2, color = SampleType)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "PCoA - Bray-Curtis",
+       x = x_label,
+       y= y_label)
+adonis_res <- adonis2(beta_div_bray ~ timepoint, data = metadata_w)
+print(adonis_res)
+```
+
+Subset Bacteria
+```{r Beta diversity, PCoA, echo=FALSE}
+# PCoA or NMDS plots with biplots
+# identification of top 5 microbial taxa driving community separation
+
+# since most beta diversity metrics (like Bray-Curtis, UniFrac) are sensitive to
+# sequencing depth. Consider:
+# - rarefaction (downsample to even depth) -> common in Bray-Curtis or Jaccard
+# - normalization (relative abundance or centered log-ratio) -> if using Aitchison
+
+# filter the table considering only the fungi
+final_taxa_bact <- tab_taxa_in_otu[tab_taxa_in_otu$kingdom %in% "Bacteria",] 
+final_taxa_bact <- final_taxa_bact[!is.na(final_taxa_bact)]
+
+common <- intersect(final_taxa_bact, colnames(sub_w))
+sub_w_filtered <- sub_w[, !colnames(sub_w) %in% common]
+# filter the table
+#### 1. beta diversity in Wine at different timings ####
+# we will use the variable metadata_w and the table sub_w
+# we use rarefaction
+sampleAbund <- rowSums(sub_w_filtered) # gives the number of individuals found in each sample
+# and we will take the number of the sample with less species
+# rarefy to the minimum sample depth
+min_depth <- min(sampleAbund) # check the minimum of the sample abundance
+rarefied_data <- rrarefy(sub_w_filtered, sample=min_depth) # rrarefy generates one randomly rarefied 
+# community data frame or vector of given sample size
+
+# example with Bray-Curtis on rarefied data
+# dissimilarity indices for community ecologists
+beta_div_bray <- vegdist(rarefied_data, method = "bray")
+pcoa <- cmdscale(beta_div_bray, eig = TRUE, k = 2)
+pcoa_df <- as.data.frame(pcoa$points)
+colnames(pcoa_df) <- c("PC1", "PC2")
+pcoa_df$SampleType <- metadata_w$timepoint  # or metadata$Time, etc.
+
+# Calculate percentage variance explained by each axis
+eig <- pcoa$eig
+var_exp <- eig / sum(eig[eig > 0]) * 100
+
+# Create axis labels with percentages
+x_label <- paste0("PC1 (", round(var_exp[1], 1), "%)")
+y_label <- paste0("PC2 (", round(var_exp[2], 1), "%)")
+
+# Plot
+ggplot(pcoa_df, aes(x = PC1, y = PC2, color = SampleType)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "PCoA - Bray-Curtis",
+       x = x_label,
+       y= y_label)
+adonis_res <- adonis2(beta_div_bray ~ timepoint, data = metadata_w)
+print(adonis_res)
+```
+
+Store in a file the coordinates of the PCoA 
+```{r Write table, PCoA, echo=FALSE}
+write.csv(pcoa_df, "pcoa_points_wine.csv", row.names=TRUE)
+```
+
+## Ordination tecnique: NMDS
+
+FUNGI
+```{r NMDS, echo=FALSE}
+set.seed(42)
+
+# delete bacteria
+sub_tab_taxa_eu <- sub_tab_taxa_in_otu[!sub_tab_taxa_in_otu$Kingdom %in% c("Bacteria", "Viruses"),] 
+sub_tab_taxa_eu <- sub_tab_taxa_eu[!sub_tab_taxa_eu$Species %in% "Homo sapiens",]
+sub_tax_no_na <- sub_tab_taxa_eu[!is.na(sub_tab_taxa_eu)]
+common <- intersect(sub_tax_no_na, colnames(sub_w))
+sub_w_filtered <- sub_w[, colnames(sub_w) %in% common] # take away the columns of bacteria
+
+microbes <- colnames(sub_w_filtered) # name of the columns is equal to the MO names
+groups <- rownames(sub_w_filtered) # name of the rows corresponds to the sample groups
+
+# List of microorganisms
+sub_w_filtered <- as.data.frame(sub_w_filtered)
+
+microbes <- colnames(sub_w_filtered)
+rownames(sub_w_filtered) <- c("SWT0R1", "SWT0R2", "SWT0R3", "SWT1R1", "SWT1R2", "SWT1R3", "SWT2R1", "SWT2R2", "SWT2R3", "SWT3R1", "SWT3R2", "SWT3R3", "SWT5R2", "SWT5R3")
+groups <- rownames(sub_w_filtered)
+
+final_sub_w <- sub_w_filtered %>%
+  tibble::rownames_to_column(var="sample")
+
+long_df <- final_sub_w %>%
+  pivot_longer(-sample, names_to = "microbe", values_to = "value")
+
+long_df <- long_df %>%
+  mutate(group = sub("R[0-9]+$", "", sample))
+
+# function for each microorganism
+empty_df <- data.frame(matrix(ncol = 16, nrow = 0))
+results <- lapply(microbes, function(m) { # apply the function 
+  # for each microbe in the list
+  # Kruskal-Wallis
+  subset_df <- long_df %>% filter(microbe == m) 
+  if (length(unique(subset_df$group)) < 2) { 
+    return(data.frame(microbe = m, pvalue = NA))
+  }
+  kw <- kruskal.test(value ~ group, data = subset_df) # kruskal-wallis test
+  pval <- kw$p.value # compute the p-value
+  # compute mean e median for each group
+  stats <- subset_df %>%
+    group_by(group) %>%
+    summarise(mean = mean(value), median = median(value), .groups = 'drop') %>%
+    pivot_longer(cols = c(mean, median), names_to = "stat", values_to = "val") %>%
+    unite(col = "stat_group", stat, group, sep = "_") %>%
+    # mutate(id = row_number()) %>%
+    pivot_wider(names_from = stat_group, values_from = val)
+  # Combine in another line
+  out <- data.frame(microbe = m, pvalue = round(pval, 5))
+  out_2 <- bind_cols(out, stats)
+  return(out_2)
+})
+final_df_w <- bind_rows(results)
+head(final_df_w)
+
+final_df_w <- final_df_w [,-c(2,4,6,8,10,12)] # take away the columns that are not required
+final_df_w <- as.matrix(t(final_df_w))
+colnames(final_df_w) <- microbes
+final_df_w <- final_df_w[-1,]
+df_w <- data.frame(apply(final_df_w, 2, function(x) as.numeric(as.character(x))))
+
+# Apply Hellinger transformation
+# Rename microbes to generic sp.1, sp.2, ..., sp.N
+colnames(df_w) <- paste0("sp.", seq_len(ncol(sub_w_filtered)))
+# Save the original names for reference
+microbe_map <- data.frame(
+  original_name = colnames(final_sub_w)[-1],  # drop 'sample' column
+  new_name = paste0("sp.", seq_len(ncol(sub_w_filtered)))
+)
+
+# the table df_w contains as values the mean of the replicates
+comm_hel <- decostand(df_w, method = "hellinger")
+# Bray-Curtis distance on Hellinger-transformed matrix
+#bray_dist <- vegdist(comm_hel, method = "bray")
+set.seed(123)  # for reproducibility
+#sub_w_matrix <- as.matrix(final_sub_w)
+# now we want to give names both to the row names and column names
+nmds <- metaMDS(comm_hel, distance = "bray", k = 2, trymax = 50, autotransform = FALSE, na.rm =TRUE)
+ordiplot(nmds, type="n") #Ordination plot function especially for congested plots
+orditorp(nmds, display="species", col="red", air=0.01) #The function adds text or points to ordination plots
+orditorp(nmds, display="sites", cex=1.25, air=0.01)
+
+# Extract sample coordinates 
+nmds_scores <- as.data.frame(scores(nmds, display = "sites"))
+nmds_scores$sample_id <- rownames(nmds_scores)
+nmds_scores$timepoint <- metadata_w[nmds_scores$sample_id, "timepoint"]
+
+# Plot NMDS of only the samples
+ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = timepoint)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "NMDS of Wine Samples (Bray-Curtis, Hellinger-transformed)",
+       x = "NMDS1", y = "NMDS2", color = "Timepoint")
+
+png("nmds_nobact.png", width = 2000, height = 1500, res = 300)  # 300 dpi is print-quality
+ordiplot(nmds, type="n") #Ordination plot function especially for congested plots
+orditorp(nmds, display="species", col="red", air=0.01) #The function adds text or points to ordination plots
+orditorp(nmds, display="sites", cex=1.25, air=0.01)
+dev.off()
+```
+
+## Top 15 taxa overall (across all samples)
+Take the top 5 MOs for a sample to differentiate with another one, and the top 15 MOs for all the samples.
+```{r Top 15 taxa, echo=FALSE}
+final_df_w <- bind_rows(results)
+kruskal_results <- final_df_w %>%
+  select(microbe, pvalue) %>%
+  filter(!is.na(pvalue)) %>%
+  arrange(pvalue)
+
+# Get top 15 taxa
+top15_taxa <- head(kruskal_results$microbe, 15)
+top15_taxa
+```
+Plot of the top 15 species in nmds, by their names
+```{r pressure, echo=FALSE}
+# re-give names to the df_w dataframe, in particular gives  names to the samples and 
+# to the microorganisms on the columns
+#rownames(df_w) <- c("SWT0", "SWT1", "SWT2", "SWT3", "SWT5")
+df_w <- as.data.frame(df_w)
+colnames(df_w) <- final_df_w$microbe
+comm_hel <- decostand(df_w, method = "hellinger")
+# Bray-Curtis distance on Hellinger-transformed matrix
+#bray_dist <- vegdist(comm_hel, method = "bray")
+set.seed(123)  # for reproducibility
+#sub_w_matrix <- as.matrix(final_sub_w)
+# now we want to give names both to the row names and column names
+nmds <- metaMDS(comm_hel, distance = "bray", k = 2, trymax = 50, autotransform = FALSE, na.rm =TRUE)
+plot(nmds)
+
+species_scores <- scores(nmds, display = "species")
+species_scores_top15 <- species_scores[top15_taxa, ]
+
+# Plot base ordination
+ordiplot(nmds, type = "n")
+# Add sample points (black)
+orditorp(nmds, display = "sites", cex = 1.25, air = 0.01)
+# Add only top 15 species (in red)
+text(species_scores_top15[,1], species_scores_top15[,2],
+     labels = rownames(species_scores_top15), col = "red", cex = 0.3)
+
+# Extract sample coordinates 
+nmds_scores <- as.data.frame(scores(nmds, display = "sites"))
+nmds_scores$sample_id <- rownames(nmds_scores)
+nmds_scores$timepoint <- metadata_w[nmds_scores$sample_id, "timepoint"]
+
+# Plot
+ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = timepoint)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "NMDS of Wine Samples (Bray-Curtis, Hellinger-transformed)",
+       x = "NMDS1", y = "NMDS2", color = "Timepoint")
+nmds
+
+png("nmds_no_bact_top15.png", width = 2800, height = 1200, res = 200)
+ordiplot(nmds, type = "n")
+# Add sample points (black)
+orditorp(nmds, display = "sites", cex = 1.25, air = 0.01)
+# Add only top 15 species (in red)
+text(species_scores_top15[,1], species_scores_top15[,2],
+     labels = rownames(species_scores_top15), col = "red", cex = 0.1)
+dev.off()
+```
+```{r pressure, echo=FALSE}
+# highlight only the top 3 microorganisms
+top3_taxa_interesting <- c("Aspergillus oryzae", "Komagataella phaffii", "Pichia kudriavzevii")
+top3_taxa_interesting
+```
+
+```{r pressure, echo=FALSE}
+# re-give names to the df_w dataframe, in particular gives  names to the samples and 
+# to the microorganisms on the columns
+#rownames(df_w) <- c("SWT0", "SWT1", "SWT2", "SWT3", "SWT5")
+df_w <- as.data.frame(df_w)
+colnames(df_w) <- final_df_w$microbe
+# filter the dataframe taking into account only the three species that we found previously
+#df_w <- df[, top3_taxa, drop = FALSE]
+comm_hel <- decostand(df_w, method = "hellinger")
+# Bray-Curtis distance on Hellinger-transformed matrix
+#bray_dist <- vegdist(comm_hel, method = "bray")
+set.seed(123)  # for reproducibility
+#sub_w_matrix <- as.matrix(final_sub_w)
+# now we want to give names both to the row names and column names
+nmds <- metaMDS(comm_hel, distance = "bray", k = 2, trymax = 50, autotransform = FALSE, na.rm =TRUE)
+
+species_scores <- scores(nmds, display = "species")
+species_scores_top3 <- species_scores[top3_taxa_interesting, ]
+
+# Plot base ordination
+ordiplot(nmds, type = "n")
+# Add sample points (black)
+orditorp(nmds, display = "sites", cex = 1.25, air = 0.01)
+# Add only top 15 species (in red)
+text(species_scores_top3[,1], species_scores_top3[,2],
+     labels = rownames(species_scores_top3), col = "red", cex = 0.8)
+
+# Extract sample coordinates 
+nmds_scores <- as.data.frame(scores(nmds, display = "sites"))
+nmds_scores$sample_id <- rownames(nmds_scores)
+nmds_scores$timepoint <- metadata_w[nmds_scores$sample_id, "timepoint"]
+
+# Plot
+ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = timepoint)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "NMDS of Wine Samples (Bray-Curtis, Hellinger-transformed)",
+       x = "NMDS1", y = "NMDS2", color = "Timepoint")
+png("nmds_no_bact_top3.png", width = 2800, height = 1200, res = 200)
+ordiplot(nmds, type = "n")
+# Add sample points (black)
+orditorp(nmds, display = "sites", cex = 1.25, air = 0.01)
+# Add only top 15 species (in red)
+text(species_scores_top3[,1], species_scores_top3[,2],
+     labels = rownames(species_scores_top3), col = "red", cex = 0.8)
+dev.off()
+nmds
+```
+## NMDS for bacteria
+```{r NMDS, echo=FALSE}
+set.seed(42)
+# take into consideration only bacteria
+sub_tax <- final_taxa[final_taxa$kingdom == "Bacteria",]
+sub_tax_no_na <- sub_tax[!is.na(sub_tax)]
+common <- intersect(sub_tax_no_na, colnames(sub_w))
+sub_w_filtered <- sub_w[, colnames(sub_w) %in% common] # take away the columns of bacteria
+
+microbes <- colnames(sub_w_filtered) # name of the columns is equal to the MO names
+groups <- rownames(sub_w_filtered) # name of the rows corresponds to the sample groups
+
+# List of microorganisms
+sub_w_filtered <- as.data.frame(sub_w_filtered)
+
+microbes <- colnames(sub_w_filtered)
+rownames(sub_w_filtered) <- c("T0R1", "T0R2", "T0R3", 
+                              "T1R1", "T1R2", "T1R3", 
+                              "T2R1", "T2R2", "T2R3", 
+                              "T3R1", "T3R2", "T3R3", 
+                              "T5R2", "T5R3")
+groups <- rownames(sub_w_filtered)
+
+final_sub_w <- sub_w_filtered %>%
+  tibble::rownames_to_column(var="sample")
+
+long_df <- final_sub_w %>%
+  pivot_longer(-sample, names_to = "microbe", values_to = "value")
+
+long_df <- long_df %>%
+  mutate(group = sub("R[0-9]+$", "", sample))
+
+# function for each microorganism
+empty_df <- data.frame(matrix(ncol = 16, nrow = 0))
+results <- lapply(microbes, function(m) { # apply the function 
+  # for each microbe in the list
+  # Kruskal-Wallis
+  subset_df <- long_df %>% filter(microbe == m) 
+  if (length(unique(subset_df$group)) < 2) { 
+    return(data.frame(microbe = m, pvalue = NA))
+  }
+  kw <- kruskal.test(value ~ group, data = subset_df) # kruskal-wallis test
+  pval <- kw$p.value # compute the p-value
+  # compute mean e median for each group
+  stats <- subset_df %>%
+    group_by(group) %>%
+    summarise(mean = mean(value), median = median(value), .groups = 'drop') %>%
+    pivot_longer(cols = c(mean, median), names_to = "stat", values_to = "val") %>%
+    unite(col = "stat_group", stat, group, sep = "_") %>%
+    # mutate(id = row_number()) %>%
+    pivot_wider(names_from = stat_group, values_from = val)
+  # Combine in another line
+  out <- data.frame(microbe = m, pvalue = round(pval, 5))
+  out_2 <- bind_cols(out, stats)
+  return(out_2)
+})
+final_df_w <- bind_rows(results)
+head(final_df_w)
+
+final_df_w <- final_df_w [,-c(2,4,6,8,10,12)] # take away the columns that are not required
+final_df_w <- as.matrix(t(final_df_w))
+colnames(final_df_w) <- microbes
+final_df_w <- final_df_w[-1,]
+df_w <- data.frame(apply(final_df_w, 2, function(x) as.numeric(as.character(x))))
+
+# Apply Hellinger transformation
+# Rename microbes to generic sp.1, sp.2, ..., sp.N
+colnames(df_w) <- paste0("sp.", seq_len(ncol(sub_w_filtered)))
+# Save the original names for reference
+microbe_map <- data.frame(
+  original_name = colnames(final_sub_w)[-1],  # drop 'sample' column
+  new_name = paste0("sp.", seq_len(ncol(sub_w_filtered)))
+)
+
+# the table df_w contains as values the mean of the replicates
+comm_hel <- decostand(df_w, method = "hellinger")
+# Bray-Curtis distance on Hellinger-transformed matrix
+#bray_dist <- vegdist(comm_hel, method = "bray")
+set.seed(123)  # for reproducibility
+#sub_w_matrix <- as.matrix(final_sub_w)
+# now we want to give names both to the row names and column names
+nmds <- metaMDS(comm_hel, distance = "bray", k = 2, trymax = 50, autotransform = FALSE, na.rm =TRUE)
+ordiplot(nmds, type="n") #Ordination plot function especially for congested plots
+orditorp(nmds, display="species", col="red", air=0.01) #The function adds text or points to ordination plots
+orditorp(nmds, display="sites", cex=1.25, air=0.01)
+
+# Extract sample coordinates 
+nmds_scores <- as.data.frame(scores(nmds, display = "sites"))
+nmds_scores$sample_id <- rownames(nmds_scores)
+nmds_scores$timepoint <- metadata_w[nmds_scores$sample_id, "timepoint"]
+
+# Plot NMDS of only the samples
+ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = timepoint)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "NMDS of Wine Samples (Bray-Curtis, Hellinger-transformed)",
+       x = "NMDS1", y = "NMDS2", color = "Timepoint")
+
+png("nmds_bact.png", width = 2000, height = 1500, res = 300)  # 300 dpi is print-quality
+ordiplot(nmds, type="n") #Ordination plot function especially for congested plots
+orditorp(nmds, display="species", col="red", air=0.01) #The function adds text or points to ordination plots
+orditorp(nmds, display="sites", cex=1.25, air=0.01)
+dev.off()
+```
+## Top 15 taxa overall (across all samples)
+Take the top 5 MOs for a sample to differentiate with another one, and the top 15 MOs for all the samples.
+```{r Top 15 taxa, echo=FALSE}
+final_df_w <- bind_rows(results)
+kruskal_results <- final_df_w %>%
+  select(microbe, pvalue) %>%
+  filter(!is.na(pvalue)) %>%
+  arrange(pvalue)
+
+# Get top 15 taxa
+top15_taxa <- head(kruskal_results$microbe, 15)
+top15_taxa
+```
+```{r pressure, echo=FALSE}
+# re-give names to the df_w dataframe, in particular gives  names to the samples and 
+# to the microorganisms on the columns
+#rownames(df_w) <- c("SWT0", "SWT1", "SWT2", "SWT3", "SWT5")
+df_w <- as.data.frame(df_w)
+colnames(df_w) <- final_df_w$microbe
+comm_hel <- decostand(df_w, method = "hellinger")
+# Bray-Curtis distance on Hellinger-transformed matrix
+#bray_dist <- vegdist(comm_hel, method = "bray")
+set.seed(123)  # for reproducibility
+#sub_w_matrix <- as.matrix(final_sub_w)
+# now we want to give names both to the row names and column names
+nmds <- metaMDS(comm_hel, distance = "bray", k = 2, trymax = 50, autotransform = FALSE, na.rm =TRUE)
+plot(nmds)
+
+species_scores <- scores(nmds, display = "species")
+species_scores_top15 <- species_scores[top15_taxa, ]
+
+# Plot base ordination
+ordiplot(nmds, type = "n")
+# Add sample points (black)
+orditorp(nmds, display = "sites", cex = 1.25, air = 0.01)
+# Add only top 15 species (in red)
+text(species_scores_top15[,1], species_scores_top15[,2],
+     labels = rownames(species_scores_top15), col = "red", cex = 0.3)
+
+# Extract sample coordinates 
+nmds_scores <- as.data.frame(scores(nmds, display = "sites"))
+nmds_scores$sample_id <- rownames(nmds_scores)
+nmds_scores$timepoint <- metadata_w[nmds_scores$sample_id, "timepoint"]
+
+# Plot
+ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = timepoint)) +
+  geom_point(size = 4) +
+  theme_minimal() +
+  labs(title = "NMDS of Wine Samples (Bray-Curtis, Hellinger-transformed)",
+       x = "NMDS1", y = "NMDS2", color = "Timepoint")
+nmds
+
+png("nmds_no_bact_top15.png", width = 2800, height = 1200, res = 200)
+ordiplot(nmds, type = "n")
+# Add sample points (black)
+orditorp(nmds, display = "sites", cex = 1.25, air = 0.01)
+# Add only top 15 species (in red)
+text(species_scores_top15[,1], species_scores_top15[,2],
+     labels = rownames(species_scores_top15), col = "red", cex = 0.8)
+dev.off()
+```
+
+## Pairwise comparison between sample groups
+```{r pressure, echo=FALSE}
+# Get unique group levels in order (e.g., 1, 2, 3)
+group_levels <- sort(unique(long_df$group))
+
+# Create pairwise combinations
+group_pairs <- combn(group_levels, 2, simplify = FALSE)
+
+# Initialize list to store results
+pairwise_results <- list()
+
+for (pair in group_pairs) {
+  g1 <- pair[1]
+  g2 <- pair[2]
+  pair_label <- paste(g1, g2, sep = "_vs_")
+  
+  test_results <- lapply(microbes, function(m) {
+    subset_df <- long_df %>%
+      filter(microbe == m, group %in% c(g1, g2))
+    
+    if (length(unique(subset_df$group)) < 2) return(NULL)
+    
+    wilcox <- wilcox.test(value ~ group, data = subset_df, exact = FALSE)
+    data.frame(microbe = m, pvalue = wilcox$p.value)
+  })
+  
+  df_pair <- bind_rows(test_results) %>%
+    filter(!is.na(pvalue)) %>%
+    arrange(pvalue)
+  
+  pairwise_results[[pair_label]] <- df_pair
+}
+
+# To get the top differentiating taxa between each pair:
+lapply(pairwise_results, function(df) head(df, 10))
+```
+
+```{r pressure, echo=FALSE}
+# fit taxa vectors onto the NMDS ordination
+library(vegan)
+fit <- envfit(nmds, comm_hel, perm = 999)
+
+# Extract vector strength (correlation r) and p-values
+vecs <- fit$vectors$arrows  # directions (x,y)
+r_vals <- fit$vectors$r     # strength of correlation for each taxon
+p_vals <- fit$vectors$pvals # significance
+
+# Combine into a dataframe
+taxa_fit <- data.frame(
+  taxa = rownames(vecs),
+  NMDS1 = vecs[,1],
+  NMDS2 = vecs[,2],
+  r = r_vals,
+  p = p_vals
+)
+
+# Filter significant taxa (say p < 0.05)
+sig_taxa <- subset(taxa_fit, p < 0.05)
+
+# Sort by strength of correlation (r), descending
+top5_taxa <- sig_taxa[order(-sig_taxa$r), ][1:15, ]
+
+print(top5_taxa)
+```
+
+## Differential microbial composition
+We will do differential microbial composition between 5 different comparisons.
+Time is considered as a discrete variable, since it corresponds to point at the beginning, start, 2 points in the middle, end.
+
+There are different tools for differential expression analysis that can be used: 
+Kruskal wallis test, DeSEQ, ANCOM.
+
+The tools are: 
+- LEfSe: good to find discriminant taxa between timepoints, easy to use. Attention to false positives.
+- MaAsLin2: time is a categorical variable.
+- ANCOM-BC: robust for compositional data, you can do comparison between timepoints in couple. it does not model all the groups together.
+- DESeq2: parallel check on raw counts, traditional comparison.
+
+We saw taht the two methods for differential microbial composition give very different results so we decide to use normalizatoin methods before ANCOM (not before DEXSeq, because it has its own normalization methods)
+
+There is uncertainty which type of tool is better to use for differential microbial composition, because there are many tools and is known that they give very different results.
+
+Fot this reason is suggested to give a robust result to use different tools (rewise the use of ANCOM2 because i have not follow the tutorial)
+
+Initially we have used DESeq and ANCOM-BC to do the differential abundance analysis, but these two tools give very different results (both in term of number of MO found and also no intersection between the one found, so we decide to use other tools, in particular reading this paper: Microbiome differential abundance methods produce different results across 38 datasets), we decide to use these different tools:
+- Lefse
+- Maaslin2
+- ALDEx2
+
+Lefse
+
+#### T0 vs T1 ####
+
+Preparation of the table
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3"),]
+otu_names <- sprintf("Otu %03d", 1:697)
+colnames(filt_tab_lef) <- otu_names # give to the names of the column the name of the OTUs
+count_data <- as.matrix(t(filt_tab_lef))
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T0R1", "T0R2", "T0R3", 
+                "T1R1", "T1R2", "T1R3"),
+  timepoint = c("T0", "T0", "T0", "T1", "T1", "T1")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+```
+
+```{r pressure, echo=FALSE}
+# take the taxonomy list and put as rownames the otu numbers
+# we have to filter the species that are present in the filtered dataset, last column
+otu_names <- sprintf("Otu %03d", 1:697) # OTU names
+library(microbiomeMarker)
+otu <- otu_table(as.matrix(filt_tab_lef), taxa_are_rows = FALSE) # starting from the filt_tab_lef table, creation of an 
+# otu table 
+sample_data <- sample_data(metadata_w)
+# here there is a problem, because if we a
+# shift the species in the end of the table
+rownames(tab_taxa_in_otu) <- otu_names
+# we have to change the column names of the taxonomy table
+colnames(tab_taxa_in_otu) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps <- phyloseq(otu, sample_data, taxa)
+```
+
+Transform counts into relative counts 
+```{r pressure, echo=FALSE}
+ps_rel <- transform_sample_counts(ps, function(x) x / sum(x))
+```
+
+```{r pressure, echo=FALSE}
+lefse <- run_lefse(ps_rel, group="timepoint", taxa_rank="Species")
+```
+
+```{r pressure, echo=FALSE}
+tab_lefse <- as.data.frame(as.matrix(marker_table(lefse)))
+```
+
+```{r pressure, echo=FALSE}
+library(writexl)
+setwd("4_DA_pairwise_w_t/")
+write_xlsx(tab_lefse, "tab_LEfSe_T0_vs_T1.xlsx")
+```
+```{r pressure, echo=FALSE}
+# plot specific markers in particular the first 20 of the table
+keep_markers <- tab_lefse$feature[1:10] # take the first 10 (enriched in  T0)
+keep_markers_2 <- tab_lefse$feature[147:158] # take the last 10 (enriched in T1)
+tot <- c(keep_markers,keep_markers_2) # concatenate the two list of markers
+markers <- tot
+```
+
+```{r pressure, echo=FALSE}
+plot_ef_bar(lefse, markers = tot)
+```
+
+##### T1 vs T2 ######
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3"),]
+# there are 697 microorganisms, create the variable otu_names
+otu_names <- sprintf("Otu %03d", 1:697)
+colnames(filt_tab_lef) <- otu_names
+count_data <- as.matrix(t(filt_tab_lef)) # creation of the matrix count_data
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T1R1", "T1R2", "T1R3", 
+                "T2R1", "T2R2", "T2R3"),
+  timepoint = c("T1", "T1", "T1", "T2", "T2", "T2")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+```
+
+```{r pressure, echo=FALSE}
+# take the taxonomy list and put as rownames the otu numbers
+# we have to filter the species that are present in the filtered dataset, last column
+otu_names <- sprintf("Otu %03d", 1:697) # OTU names
+library(microbiomeMarker)
+otu <- otu_table(as.matrix(filt_tab_lef), taxa_are_rows = FALSE) # starting from the filt_tab_lef table, creation of an 
+# otu table 
+sample_data <- sample_data(metadata_w)
+rownames(tab_taxa_in_otu) <- otu_names
+# we have to change the column names of the taxonomy table
+colnames(tab_taxa_in_otu) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps <- phyloseq(otu, sample_data, taxa)
+```
+
+Transform counts into relative counts 
+```{r pressure, echo=FALSE}
+ps_rel <- transform_sample_counts(ps, function(x) x / sum(x))
+```
+
+```{r pressure, echo=FALSE}
+lefse <- run_lefse(ps_rel, group="timepoint", taxa_rank = "Species")
+```
+
+```{r pressure, echo=FALSE}
+tab_lefse <- as.data.frame(as.matrix(marker_table(lefse)))
+```
+
+```{r pressure, echo=FALSE}
+library(writexl)
+setwd("4_DA_pairwise_w_t/")
+write_xlsx(tab_lefse, "tab_LEfSe_T1_vs_T2.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+plot_ef_bar(lefse)
+```
+
+##### T2 vs T3 #######
+Preparation of the table
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T2R1", "T2R2", "T2R3", "T3R1", "T3R2", "T3R3"),]
+otu_names <- sprintf("Otu %03d", 1:697)
+colnames(filt_tab_lef) <- otu_names
+count_data <- as.matrix(t(filt_tab_lef))
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T2R1", "T2R2", "T2R3", 
+                "T3R1", "T3R2", "T3R3"),
+  timepoint = c("T2", "T2", "T2", "T3", "T3", "T3")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+```
+
+```{r pressure, echo=FALSE}
+# take the taxonomy list and put as rownames the otu numbers
+# we have to filter the species that are present in the filtered dataset, last column
+otu_names <- sprintf("Otu %03d", 1:697) # OTU names
+library(microbiomeMarker)
+otu <- otu_table(as.matrix(filt_tab_lef), taxa_are_rows = FALSE) # starting from the filt_tab_lef table, creation of an 
+# otu table 
+sample_data <- sample_data(metadata_w)
+rownames(tab_taxa_in_otu) <- otu_names
+# we have to change the column names of the taxonomy table
+colnames(tab_taxa_in_otu) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps <- phyloseq(otu, sample_data, taxa)
+```
+
+Transform counts into relative counts 
+```{r pressure, echo=FALSE}
+ps_rel <- transform_sample_counts(ps, function(x) x / sum(x))
+```
+
+```{r pressure, echo=FALSE}
+lefse <- run_lefse(ps_rel, group="timepoint", taxa_rank = "Species")
+```
+
+```{r pressure, echo=FALSE}
+tab_lefse <- as.data.frame(as.matrix(marker_table(lefse)))
+```
+
+```{r pressure, echo=FALSE}
+library(writexl)
+setwd("4_DA_pairwise_w_t/")
+write_xlsx(tab_lefse, "tab_LEfSe_T2_vs_T3.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+plot_ef_bar(lefse)
+```
+
+##### T3 VS T5 ########
+Preparation of the table
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T3R1", "T3R2", "T3R3", "T5R2", "T5R3"),]
+otu_names <- sprintf("Otu %03d", 1:697)
+colnames(filt_tab_lef) <- otu_names
+count_data <- as.matrix(t(filt_tab_lef))
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T3R1", "T3R2", "T3R3",
+                "T5R2", "T5R3"),
+  timepoint = c("T3", "T3", "T3", 
+                "T5", "T5")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+```
+
+```{r pressure, echo=FALSE}
+# take the taxonomy list and put as rownames the otu numbers
+# we have to filter the species that are present in the filtered dataset, last column
+otu_names <- sprintf("Otu %03d", 1:697) # OTU names
+library(microbiomeMarker)
+otu <- otu_table(as.matrix(filt_tab_lef), taxa_are_rows = FALSE) # starting from the filt_tab_lef table, creation of an 
+# otu table 
+sample_data <- sample_data(metadata_w)
+rownames(tab_taxa_in_otu) <- otu_names
+# we have to change the column names of the taxonomy table
+colnames(tab_taxa_in_otu) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxa <- tax_table(as.matrix(tab_taxa_in_otu))
+ps <- phyloseq(otu, sample_data, taxa)
+```
+
+Transform counts into relative counts 
+```{r pressure, echo=FALSE}
+ps_rel <- transform_sample_counts(ps, function(x) x / sum(x))
+```
+
+```{r pressure, echo=FALSE}
+lefse <- run_lefse(ps_rel, group="timepoint", taxa_rank = "Species")
+```
+
+fot the time t3 vs t5 i have no markers identified by lefse
+```{r pressure, echo=FALSE}
+#tab_lefse <- as.data.frame(as.matrix(marker_table(lefse)))
+```
+
+```{r pressure, echo=FALSE}
+library(writexl)
+#setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/1_DA_pairwise_w_t/")
+#write_xlsx(tab_lefse, "tab_LEfSe_T3_vs_T5.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+#plot_ef_bar(lefse_result)
+```
+
+##### T0 VS T1 ########
+## pairwise comparison between timings (TO and T1, T1 and T2, T2 and T3, and T3 and T5)
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the T0 and T1
+sub_ww <- sub_w[rownames(sub_w) %in% c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3"),]
+count_data <- as.matrix(t(sub_ww))
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T0R1", "T0R2", "T0R3", 
+                "T1R1", "T1R2", "T1R3"),
+  timepoint = c("T0", "T0", "T0", "T1", "T1", "T1")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+
+# to ensure DESeq2 ccorrectly interprets that T0 is the baseline (reference) and T1 is being compared to TO, we explicitly set the factor levels in that order
+col_data$timepoint <- factor(col_data$timepoint, levels = c("T0", "T1"))
+
+# Create DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = col_data,
+                              design = ~ timepoint)
+
+# Step 2: Estimate size factors using 'poscounts' method
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+# Step 3: Run DESeq
+dds <- DESeq(dds)
+
+# Step 4: Get results
+res <- results(dds)
+
+res_df <- as.data.frame(res)
+res_df$Significant <- res_df$padj < 0.05
+
+res_df <- res_df %>%
+  mutate(label = ifelse(Significant,
+                        as.character(rownames(res_df)),  # replace with your name column
+                        NA_character_))
+library(dplyr)
+library(ggrepel)
+# Select top genes (adjust thresholds as needed)
+top_genes <- res_df %>%
+  filter(padj < 0.05) %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 20)  # Top 20 DEGs (10 up, 10 down ideally)
+
+# Optional: reorder for plotting
+top_genes <- top_genes %>%
+  mutate(Gene = factor(label, levels = label[order(log2FoldChange)]))
+
+# Bar chart
+ggplot(top_genes, aes(x = Gene, y = log2FoldChange, fill = log2FoldChange > 0)) +
+  geom_col() +
+  scale_fill_manual(values = c("blue", "red"), labels = c("Depleted", "Enriched")) +
+  coord_flip() +  # Horizontal bars
+  theme_minimal() +
+  labs(title = "Top Differentially Abundant Taxa",
+       x = "Microorgamism",
+       y = "Log2 Fold Change",
+       fill = "Differential Abundance") +
+  theme(axis.text.y = element_text(size = 8))
+```
+N.B. R uses the first level of a factor as the reference, and DESeq2 compares other levels against the reference, so enriched means enriched in T1 respect to the reference T0 and depleted, depleted in T1 respect to the reference T0.
+
+```{r pressure, echo=FALSE}
+# Adjust thresholds as needed
+padj_threshold <- 0.05
+log2fc_threshold <- 1
+
+res_df$Significant <- res_df$padj < padj_threshold & abs(res_df$log2FoldChange) > log2fc_threshold
+
+sig_taxa <- res_df[res_df$Significant == TRUE, ]
+dim(sig_taxa) # 962 significant taxa
+dim(sub_w) # out of 1328 taxa
+print(sig_taxa)
+new_sig <- sig_taxa[,c(2,6)]
+setwd("4_DA_pairwise_w_t")
+write.csv(new_sig, "deseqt0vst1.csv", row.names = TRUE)
+```
+
+
+There are microorganisms that have NA values, this are unclassified MO by kraken
+
+#### T1 vs T2
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the TO and T1
+sub_w12 <- sub_w[rownames(sub_w) %in% c("T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3"), ]
+count_data <- as.matrix(t(sub_w12))
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T1R1", "T1R2", "T1R3", 
+                "T2R1", "T2R2", "T2R3"),
+  timepoint = c("T1", "T1", "T1", "T2", "T2", "T2")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+
+col_data$timepoint <- factor(col_data$timepoint, levels = c("T1", "T2"))
+
+# Create DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = col_data,
+                              design = ~ timepoint)
+
+# Step 2: Estimate size factors using 'poscounts' method
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+# Step 3: Run DESeq
+dds <- DESeq(dds)
+
+# Step 4: Get results
+res <- results(dds)
+
+res_df <- as.data.frame(res)
+res_df$Significant <- res_df$padj < 0.05
+
+# Select top genes (adjust thresholds as needed)
+top_genes <- res_df %>%
+  filter(padj < 0.05) %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 20)  # Top 20 DEGs (10 up, 10 down ideally)
+
+# Optional: reorder for plotting
+top_genes <- top_genes %>%
+  rownames_to_column(var = "label") %>%     # Move rownames into a column named 'label'
+  mutate(Gene = factor(label, levels = label[order(log2FoldChange)]))
+
+# Bar chart
+ggplot(top_genes, aes(x = Gene, y = log2FoldChange, fill = log2FoldChange > 0)) +
+  geom_col() +
+  scale_fill_manual(values = c("blue", "red"), labels = c("Depleted", "Enriched")) +
+  coord_flip() +  # Horizontal bars
+  theme_minimal() +
+  labs(title = "Top Differentially Abundant Taxa",
+       x = "Microorganism",
+       y = "Log2 Fold Change",
+       fill = "Differential Abundance") +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+```{r pressure, echo=FALSE}
+# Adjust thresholds as needed
+padj_threshold <- 0.05
+log2fc_threshold <- 1
+
+res_df$Significant <- res_df$padj < padj_threshold & abs(res_df$log2FoldChange) > log2fc_threshold
+
+sig_taxa <- res_df[res_df$Significant == TRUE, ]
+dim(sig_taxa) # 962 significant taxa
+dim(sub_w) # out of 1328 taxa
+print(sig_taxa)
+new_sig <- sig_taxa[,c(2,6)]
+setwd("4_DA_pairwise_w_t")
+write.csv(new_sig, "deseqt1vst2.csv", row.names = TRUE)
+```
+
+#### T2 vs T3
+```{r pressure, echo=FALSE}
+# subset to sample T0 and T1
+# take from the dataframe only the TO and T1
+sub_w23 <- sub_w[rownames(sub_w) %in% c("T2R1", "T2R2", "T2R3", "T3R1", "T3R2", "T3R3"), ]
+count_data <- as.matrix(t(sub_w23))
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T2R1", "T2R2", "T2R3", 
+                "T3R1", "T3R2", "T3R3"),
+  timepoint = c("T2", "T2", "T2", "T3", "T3", "T3")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+
+col_data$timepoint <- factor(col_data$timepoint, levels = c("T2", "T3"))
+
+# Create DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = col_data,
+                              design = ~ timepoint)
+
+# Step 2: Estimate size factors using 'poscounts' method
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+# Step 3: Run DESeq
+dds <- DESeq(dds)
+
+# Step 4: Get results
+res <- results(dds)
+
+res_df <- as.data.frame(res)
+res_df$Significant <- res_df$padj < 0.05
+
+# Select top genes (adjust thresholds as needed)
+top_genes <- res_df %>%
+  filter(padj < 0.05) %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 20)  # Top 20 DEGs (10 up, 10 down ideally)
+
+# Optional: reorder for plotting
+top_genes <- top_genes %>%
+  rownames_to_column(var = "label") %>%     # Move rownames into a column named 'label'
+  mutate(Gene = factor(label, levels = label[order(log2FoldChange)]))
+
+# Bar chart
+ggplot(top_genes, aes(x = Gene, y = log2FoldChange, fill = log2FoldChange > 0)) +
+  geom_col() +
+  scale_fill_manual(values = c("blue", "red"), labels = c("Depleted", "Enriched")) +
+  coord_flip() +  # Horizontal bars
+  theme_minimal() +
+  labs(title = "Top Differentially Abundant Taxa",
+       x = "Microorganism",
+       y = "Log2 Fold Change",
+       fill = "Differential Abundance") +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+```{r pressure, echo=FALSE}
+# Adjust thresholds as needed
+padj_threshold <- 0.05
+log2fc_threshold <- 1
+
+res_df$Significant <- res_df$padj < padj_threshold & abs(res_df$log2FoldChange) > log2fc_threshold
+
+sig_taxa <- res_df[res_df$Significant == TRUE, ]
+dim(sig_taxa) # 962 significant taxa
+dim(sub_w) # out of 1328 taxa
+print(sig_taxa)
+
+new_sig <- sig_taxa[,c(2,6)]
+setwd(".../4_DA_pairwise_w_t")
+write.csv(new_sig, "deseqt2vst3.csv", row.names = TRUE)
+```
+
+#### T3 vs T5
+```{r pressure, echo=FALSE}
+# subset to sample T3 and T5
+# take from the dataframe only the TO and T1
+sub_w35 <- sub_w[rownames(sub_w) %in% c("T3R1", "T3R2", "T3R3", "T5R2", "T5R3"), ]
+
+# Keep rows (taxa) with at least a few counts in at least 2 samples, we apply this filter since the result without filters gives NA values
+count_data <- as.matrix(t(sub_w35))
+
+# ADDITIONAL FILTER: keep rows (taxa) with at least a few counts in at least 2 samples
+keep <- rowSums(count_data >= 10) >= 2 
+count_data_filtered <- count_data[keep, ]
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T3R1", "T3R2", "T3R3", "T5R2", "T5R3"),
+  timepoint = c("T3", "T3", "T3", "T5", "T5")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+col_data <- metadata_w
+
+col_data$timepoint <- factor(col_data$timepoint, levels = c("T3", "T5"))
+
+# Create DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = count_data_filtered,
+                              colData = col_data,
+                              design = ~ timepoint)
+
+# Step 2: Estimate size factors using 'poscounts' method
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+# Step 3: Run DESeq
+dds <- DESeq(dds)
+
+# Step 4: Get results
+res <- results(dds)
+
+res_df <- as.data.frame(res)
+res_df$Significant <- res_df$padj < 0.05
+
+# Select top genes (adjust thresholds as needed)
+top_genes <- res_df %>%
+  filter(padj < 0.05) %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  slice_head(n = 20)  # Top 20 DEGs (10 up, 10 down ideally)
+
+# Optional: reorder for plotting
+top_genes <- top_genes %>%
+  rownames_to_column(var = "label") %>%     # Move rownames into a column named 'label'
+  mutate(Gene = factor(label, levels = label[order(log2FoldChange)]))
+
+# Bar chart
+ggplot(top_genes, aes(x = Gene, y = log2FoldChange, fill = log2FoldChange > 0)) +
+  geom_col() +
+  scale_fill_manual(values = c("blue", "red"), labels = c("Depleted", "Enriched")) +
+  coord_flip() +  # Horizontal bars
+  theme_minimal() +
+  labs(title = "Top Differentially Abundant Taxa",
+       x = "Microorganism",
+       y = "Log2 Fold Change",
+       fill = "Regulation") +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+```{r pressure, echo=FALSE}
+# Adjust thresholds as needed
+padj_threshold <- 0.05
+log2fc_threshold <- 1
+
+res_df$Significant <- res_df$padj < padj_threshold & abs(res_df$log2FoldChange) > log2fc_threshold
+
+sig_taxa <- res_df[res_df$Significant == TRUE, ]
+dim(sig_taxa) # 962 significant taxa
+dim(sub_w) # out of 1328 taxa
+print(sig_taxa)
+
+new_sig <- sig_taxa[,c(2,6)]
+setwd(".../4_DA_pairwise_w_t")
+write.csv(new_sig, "deseqt3vst5.csv", row.names = TRUE)
+```
+
+## MAASLIN2 ##
+MaAaLin2 requires two input files: 
+- taxonomic or functional feature abundances: tab-delimeted file, features as columns and samples as rows
+- sample metadata: tab-delimited file, features as columns and samples as rows
+
+For information on how to use it: https://bioconductor.statistik.tu-dortmund.de/packages/3.10/bioc/vignettes/Maaslin2/inst/doc/maaslin2.html
+```{r pressure, echo=FALSE}
+setwd(".../maaslin2")
+getwd()
+
+# subset to sample T0 and T1
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T0R1", "T0R2", "T0R3", 
+                                                   "T1R1", "T1R2", "T1R3"),]
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T0R1", "T0R2", "T0R3", 
+                "T1R1", "T1R2", "T1R3"),
+  timepoint = c("T0", "T0", "T0", "T1", "T1", "T1")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+```
+
+```{r pressure, echo=FALSE}
+library(Maaslin2)
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/maaslin2")
+getwd()
+fit_data2 = Maaslin2(
+    input_data = filt_tab_lef,  
+    input_metadata = metadata_w, 
+    output = "T0 vs T1", 
+    fixed_effects = "timepoint")
+```
+```{r pressure, echo=FALSE}
+# subset to sample T1 and T2
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3"),]
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T1R1", "T1R2", "T1R3", 
+                "T2R1", "T2R2", "T2R3"),
+  timepoint = c("T1", "T1", "T1", "T2", "T2", "T2")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+```
+
+```{r pressure, echo=FALSE}
+setwd(".../4_DA_pairwise_w_t/maaslin2")
+getwd()
+
+library(Maaslin2)
+fit_data_t12 = Maaslin2(
+    input_data = filt_tab_lef,  
+    input_metadata = metadata_w, 
+    output = "T1 vs T2", 
+    fixed_effects = c("timepoint"))
+```
+
+```{r pressure, echo=FALSE}
+# subset to sample T2 and T3
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T2R1", "T2R2", "T2R3", "T3R1", "T3R2", "T3R3"),]
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T2R1", "T2R2", "T2R3", 
+                "T3R1", "T3R2", "T3R3"),
+  timepoint = c("T2", "T2", "T2", "T3", "T3", "T3")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+```
+
+```{r pressure, echo=FALSE}
+library(Maaslin2)
+setwd(".../maaslin2")
+getwd()
+fit_data23 = Maaslin2(
+    input_data = filt_tab_lef,  
+    input_metadata = metadata_w, 
+    output = "T2 vs T3", 
+    fixed_effects = c("timepoint"))
+```
+
+```{r pressure, echo=FALSE}
+# subset to sample T2 and T3
+# take from the dataframe only the T0 and T1
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T3R1", "T3R2", "T3R3", "T5R2", "T5R3"),]
+
+# N.B. samples that share the same timepoint value are treated as biological replicates
+metadata_w <- data.frame(
+  sample_id = c("T3R1", "T3R2", "T3R3", 
+                "T5R1", "T5R2", "T5R3"),
+  timepoint = c("T3", "T3", "T3", "T5", "T5", "T5")
+)
+
+rownames(metadata_w) <- metadata_w$sample_id
+metadata_w$sample_id <- NULL
+```
+
+```{r pressure, echo=FALSE}
+library(Maaslin2)
+setwd("....../4_DA_pairwise_w_t/maaslin2")
+getwd()
+fit_data23 = Maaslin2(
+    input_data = filt_tab_lef,  
+    input_metadata = metadata_w, 
+    output = "T3 vs T5", 
+    fixed_effects = c("timepoint"))
+```
+
+```{r pressure, echo=FALSE}
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+```
+
+## T0 vs T1 ##
+```{r pressure, echo=FALSE}
+setwd("....../4_DA_pairwise_w_t/maaslin2/T0\ vs\ T1")
+results <- read.delim("all_results.tsv", stringsAsFactors = FALSE)
+```
+
+```{r pressure, echo=FALSE}
+results <- results %>%
+  mutate(
+    direction = case_when(
+      coef > 0 & qval < 0.05 ~ "Enriched",
+      coef < 0 & qval < 0.05 ~ "Depleted",
+      TRUE ~ "Not significant"
+    )
+  )
+```
+
+Now we do a barplot for all the microorganisms that could be enriched or depleted
+```{r pressure, echo=FALSE}
+# Filter for significant features
+sig_results <- results %>%
+  filter(qval < 0.05)
+
+top_enriched <- sig_results %>%
+  filter(coef > 0) %>%
+  arrange(desc(coef)) %>%
+  slice_head(n = 10)
+
+top_depleted <- sig_results %>%
+  filter(coef < 0) %>%
+  arrange(coef) %>%
+  slice_head(n = 10)
+
+top_features <- bind_rows(top_enriched, top_depleted)
+
+# Order features for plotting
+top_features$feature <- factor(top_features$feature, levels = top_features$feature[order(top_features$coef)])
+
+# Optional: Add direction column for color
+top_features <- top_features %>%
+  mutate(direction = ifelse(coef > 0, "Enriched", "Depleted"))
+
+library(ggplot2)
+
+ggplot(top_features, aes(x = feature, y = coef, fill = direction)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("Enriched" = "steelblue", "Depleted" = "firebrick")) +
+  labs(
+    title = "Top 10 Enriched and Depleted Microbes",
+    x = "Microorganism",
+    y = "Effect Size (Coefficient)",
+    fill = "Direction"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+```{r pressure, echo=FALSE}
+# Step 1: Temporarily protect 'sp.' by replacing it with a placeholder
+sig_results$feature <- gsub("sp\\.", "___SP___", sig_results$feature)
+
+# Step 2: Replace all remaining dots with spaces
+sig_results$feature <- gsub("\\.", " ", sig_results$feature)
+
+# Step 3: Restore 'sp.' from the placeholder
+sig_results$feature <- gsub("___SP___", "sp.", sig_results$feature)
+```
+
+
+## T1 vs T2 maaslin 2 ##
+```{r pressure, echo=FALSE}
+setwd(".../4_DA_pairwise_w_t/maaslin2/T1 vs T2/")
+results_12 <- read.delim("all_results.tsv", stringsAsFactors = FALSE)
+```
+
+```{r pressure, echo=FALSE}
+results_12 <- results_12 %>%
+  mutate(
+    direction = case_when(
+      coef > 0 & qval < 0.05 ~ "Enriched",
+      coef < 0 & qval < 0.05 ~ "Depleted",
+      TRUE ~ "Not significant"
+    )
+  )
+```
+
+Now we do a barplot for all the microorganisms that could be enriched or depleted
+```{r pressure, echo=FALSE}
+# Filter for significant features
+sig_results12 <- results_12 %>%
+  filter(qval < 0.05)
+
+top_enriched <- sig_results12 %>%
+  filter(coef > 0) %>%
+  arrange(desc(coef)) %>%
+  slice_head(n = 10)
+
+top_depleted <- sig_results12 %>%
+  filter(coef < 0) %>%
+  arrange(coef) %>%
+  slice_head(n = 10)
+
+top_features <- bind_rows(top_enriched, top_depleted)
+
+# Order features for plotting
+top_features$feature <- factor(top_features$feature, levels = top_features$feature[order(top_features$coef)])
+
+# Optional: Add direction column for color
+top_features <- top_features %>%
+  mutate(direction = ifelse(coef > 0, "Enriched", "Depleted"))
+
+library(ggplot2)
+
+ggplot(top_features, aes(x = feature, y = coef, fill = direction)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("Enriched" = "steelblue", "Depleted" = "firebrick")) +
+  labs(
+    title = "Top 10 Enriched and Depleted Microbes",
+    x = "Microorganism",
+    y = "Effect Size (Coefficient)",
+    fill = "Direction"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r pressure, echo=FALSE}
+# Step 1: Temporarily protect 'sp.' by replacing it with a placeholder
+sig_results12$feature <- gsub("sp\\.", "___SP___", sig_results12$feature)
+
+# Step 2: Replace all remaining dots with spaces
+sig_results12$feature <- gsub("\\.", " ", sig_results12$feature)
+
+# Step 3: Restore 'sp.' from the placeholder
+sig_results12$feature <- gsub("___SP___", "sp.", sig_results12$feature)
+```
+
+## T2 vs T3 maaslin 2 ##
+```{r pressure, echo=FALSE}
+setwd(".../4_DA_pairwise_w_t/maaslin2/T2 vs T3/")
+results_23 <- read.delim("all_results.tsv", stringsAsFactors = FALSE)
+```
+
+```{r pressure, echo=FALSE}
+results_23 <- results_23 %>%
+  mutate(
+    direction = case_when(
+      coef > 0 & qval < 0.05 ~ "Enriched",
+      coef < 0 & qval < 0.05 ~ "Depleted",
+      TRUE ~ "Not significant"
+    )
+  )
+```
+
+Now we do a barplot for all the microorganisms that could be enriched or depleted
+```{r pressure, echo=FALSE}
+# Filter for significant features
+sig_results23 <- results_23 %>%
+  filter(qval < 0.05)
+
+top_enriched <- sig_results23 %>%
+  filter(coef > 0) %>%
+  arrange(desc(coef)) %>%
+  slice_head(n = 10)
+
+top_depleted <- sig_results23 %>%
+  filter(coef < 0) %>%
+  arrange(coef) %>%
+  slice_head(n = 10)
+
+top_features <- bind_rows(top_enriched, top_depleted)
+
+# Order features for plotting
+top_features$feature <- factor(top_features$feature, levels = top_features$feature[order(top_features$coef)])
+
+# Optional: Add direction column for color
+top_features <- top_features %>%
+  mutate(direction = ifelse(coef > 0, "Enriched", "Depleted"))
+
+library(ggplot2)
+
+ggplot(top_features, aes(x = feature, y = coef, fill = direction)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("Enriched" = "steelblue", "Depleted" = "firebrick")) +
+  labs(
+    title = "Top 10 Enriched and Depleted Microbes",
+    x = "Microorganism",
+    y = "Effect Size (Coefficient)",
+    fill = "Direction"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r pressure, echo=FALSE}
+# Step 1: Temporarily protect 'sp.' by replacing it with a placeholder
+sig_results23$feature <- gsub("sp\\.", "___SP___", sig_results23$feature)
+
+# Step 2: Replace all remaining dots with spaces
+sig_results23$feature <- gsub("\\.", " ", sig_results23$feature)
+
+# Step 3: Restore 'sp.' from the placeholder
+sig_results23$feature <- gsub("___SP___", "sp.", sig_results23$feature)
+```
+
+
+## T3 vs T5 maaslin 2 ##
+```{r pressure, echo=FALSE}
+setwd(".../4_DA_pairwise_w_t/maaslin2/T1 vs T2/")
+results_35 <- read.delim("all_results.tsv", stringsAsFactors = FALSE)
+```
+
+```{r pressure, echo=FALSE}
+results_35 <- results_35 %>%
+  mutate(
+    direction = case_when(
+      coef > 0 & qval < 0.05 ~ "Enriched",
+      coef < 0 & qval < 0.05 ~ "Depleted",
+      TRUE ~ "Not significant"
+    )
+  )
+```
+
+Now we do a barplot for all the microorganisms that could be enriched or depleted
+```{r pressure, echo=FALSE}
+# Filter for significant features
+sig_results35 <- results_35 %>%
+  filter(qval < 0.05)
+
+top_enriched <- sig_results35 %>%
+  filter(coef > 0) %>%
+  arrange(desc(coef)) %>%
+  slice_head(n = 10)
+
+top_depleted <- sig_results35 %>%
+  filter(coef < 0) %>%
+  arrange(coef) %>%
+  slice_head(n = 10)
+
+top_features <- bind_rows(top_enriched, top_depleted)
+
+# Order features for plotting
+top_features$feature <- factor(top_features$feature, levels = top_features$feature[order(top_features$coef)])
+
+# Optional: Add direction column for color
+top_features <- top_features %>%
+  mutate(direction = ifelse(coef > 0, "Enriched", "Depleted"))
+
+library(ggplot2)
+
+ggplot(top_features, aes(x = feature, y = coef, fill = direction)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("Enriched" = "steelblue", "Depleted" = "firebrick")) +
+  labs(
+    title = "Top 10 Enriched and Depleted Microbes",
+    x = "Microorganism",
+    y = "Effect Size (Coefficient)",
+    fill = "Direction"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+```{r pressure, echo=FALSE}
+# Step 1: Temporarily protect 'sp.' by replacing it with a placeholder
+sig_results35$feature <- gsub("sp\\.", "___SP___", sig_results35$feature)
+
+# Step 2: Replace all remaining dots with spaces
+sig_results35$feature <- gsub("\\.", " ", sig_results35$feature)
+
+# Step 3: Restore 'sp.' from the placeholder
+sig_results35$feature <- gsub("___SP___", "sp.", sig_results35$feature)
+```
+
+
+###### COMPARISON BETWEEN LEFSE, DESEQ2 AND MASLIN2 ######
+
+T0 VS T1
+```{r pressure, echo=FALSE, warning=FALSE}
+# venn diagram
+library(readxl)
+lefse <- read_excel(".../4_DA_pairwise_w_t/tab_LEfSe_T0_vs_T1.xlsx")
+deseq <- read_csv(".../4_DA_pairwise_w_t/deseqt0vst1.csv")
+maaslin <- read.delim(".../4_DA_pairwise_w_t/maaslin2/T0 vs T1/all_results.tsv")
+
+# keep only significant results of both the three tools, i.e. bacteria with p-value less than 0.5
+sign_lefse <- lefse[which(lefse$padj <= 0.05),]
+sign_deseq <- deseq[which(deseq$padj <= 0.05),]
+sign_maaslin <- maaslin[which(maaslin$pval <= 0.05),]
+
+# modify the names of maaslin, i.e. take away the point and put the space
+names_maaslin <- gsub("(?<!sp)\\.", " ", maaslin$feature, perl = TRUE)
+
+library(VennDiagram)
+venn.plot <- venn.diagram(
+  x = list(DESeq=sign_deseq$...1, lefse=sign_lefse$feature, maaslin2=names_maaslin),
+  filename=NULL,
+  fill = c("blue", "orange", "red"),
+  alpha = 0.6,
+  cex = 1.0,          # text size for numbers
+  cat.cex = 1.6,      # text size for set names
+  cat.col = c("blue", "orange", "red")  # colors for category labels
+)
+grid.newpage()     # Start a new grid page (important)
+grid.draw(venn.plot)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+t0_t1_diff_MO <- Reduce(intersect, list(DESeq=sign_deseq$...1, lefse=sign_lefse$feature, maaslin=names_maaslin)) # check that the number of MOs in common is equal to the number 
+# found in the Venn diagram
+length(t0_t1_diff_MO) # yes 99 as the ones found in the venn diagram
+```
+
+# Now we filter the differential abundant MO for each pairwise timepoints
+# We see the differential Fungi and bacteria
+
+Extract from lefse result which ones have been found enriched in T0 and T1
+```{r pressure, echo=FALSE, warning=FALSE}
+# first we have to filter from the lefse result, the 119 MO
+sub_sign_lefse_t0_t1 <- sign_lefse[sign_lefse$feature %in% t0_t1_diff_MO,]
+dim(sub_sign_lefse_t0_t1)
+```
+
+# Fungi
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t0_t1_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% sub_sign_lefse_t0_t1$feature,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t0_t1_diff_taxonomy_eucaria <- t0_t1_diff_taxonomy[t0_t1_diff_taxonomy$Kingdom %in% "Eukaryota", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t0_t1_diff_MO_eu <- t0_t1_diff_taxonomy_eucaria$Species
+length(t0_t1_diff_MO_eu)
+```
+# Put this list of fungi in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 58 MO that are present in the table
+lefse_fungi_t0_t1 <- sub_sign_lefse_t0_t1[sub_sign_lefse_t0_t1$feature %in% t0_t1_diff_MO_eu, ]
+dim(lefse_fungi_t0_t1)
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+fungi_enriched_t0t1 <- lefse_fungi_t0_t1[, c("feature", "enrich_group")]
+dim(fungi_enriched_t0t1)
+```
+
+# Bacteria
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t0_t1_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% t0_t1_diff_MO,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t0_t1_diff_taxonomy_bacteria <- t0_t1_diff_taxonomy[t0_t1_diff_taxonomy$Kingdom %in% "Bacteria", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t0_t1_diff_MO_bact <- t0_t1_diff_taxonomy_bacteria$Species
+length(t0_t1_diff_MO_bact)
+```
+# Put this list of bacteria in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 61 MO that are present in the table
+lefse_bacteria_t0_t1 <- sub_sign_lefse_t0_t1[sub_sign_lefse_t0_t1$feature %in% t0_t1_diff_MO_bact, ]
+dim(lefse_bacteria_t0_t1)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+bacteria_enriched_t0t1 <- lefse_bacteria_t0_t1[, c("feature", "enrich_group")]
+dim(bacteria_enriched_t0t1)
+```
+
+# creation of the tables and put in the directory the MO enriched in t0 vs t1, and after thhat decided from the list which microorganism to put in the rpesentation
+```{r pressure, echo=FALSE, warning=FALSE}
+library(writexl)
+setwd(".../4_DA_pairwise_w_t/ENRICHED/t0vst1/")
+getwd()
+write_xlsx(lefse_bacteria_t0_t1, "bacteria_t0vst1.xlsx")
+write_xlsx(lefse_fungi_t0_t1, "fungi_t0vst1.xlsx")
+```
+
+T1 VS T2
+```{r pressure, echo=FALSE, warning=FALSE}
+# venn diagram
+library(readxl)
+library(readr)
+lefse <- read_excel(".../4_DA_pairwise_w_t/tab_LEfSe_T1_vs_T2.xlsx")
+deseq <- read_csv(".../4_DA_pairwise_w_t/deseqt1vst2.csv")
+maaslin <- read.delim(".../4_DA_pairwise_w_t/maaslin2/T1 vs T2/all_results.tsv")
+
+# keep only significant results of both the three tools, i.e. bacteria with p-value less than 0.5
+sign_lefse <- lefse[which(lefse$padj <= 0.05),]
+sign_deseq <- deseq[which(deseq$padj <= 0.05),]
+sign_maaslin <- maaslin[which(maaslin$pval <= 0.05),]
+
+# modify the names of maaslin, i.e. take away the point and put the space
+names_maaslin <- gsub("(?<!sp)\\.", " ", maaslin$feature, perl = TRUE)
+
+library(VennDiagram)
+venn.plot <- venn.diagram(
+  x = list(DESeq=sign_deseq$...1, lefse=sign_lefse$feature, maaslin2=names_maaslin),
+  filename=NULL,
+  fill = c("blue", "orange", "red"),
+  alpha = 0.6,
+  cex = 1.0,          # text size for numbers
+  cat.cex = 1.6,      # text size for set names
+  cat.col = c("blue", "orange", "red")  # colors for category labels
+)
+grid.newpage()     # Start a new grid page (important)
+grid.draw(venn.plot)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+t1_t2_diff_MO <- Reduce(intersect, list(DESeq=sign_deseq$...1, lefse=sign_lefse$feature, names_maaslin)) # check that the number of MOs in common is equal to the number 
+# found in the Venn diagram
+length(t1_t2_diff_MO) # yes 99 as the ones found in the venn diagram
+```
+
+# Now we filter the differential abundant MO for each pairwise timepoints
+# We see the differential Fungi and bacteria
+
+Extract from lefse result which ones have been found enriched in T0 and T1
+```{r pressure, echo=FALSE, warning=FALSE}
+# first we have to filter from the lefse result, the 119 MO
+sub_sign_lefse_t1_t2 <- sign_lefse[sign_lefse$feature %in% t1_t2_diff_MO,]
+dim(sub_sign_lefse_t1_t2)
+```
+
+# Fungi
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t1_t2_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% sub_sign_lefse_t1_t2$feature,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t1_t2_diff_taxonomy_eucaria <- t1_t2_diff_taxonomy[t1_t2_diff_taxonomy$Kingdom %in% "Eukaryota", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t1_t2_diff_MO_eu <- t1_t2_diff_taxonomy_eucaria$Species
+length(t1_t2_diff_MO_eu)
+```
+# Put this list of fungi in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 58 MO that are present in the table
+lefse_fungi_t1_t2 <- sub_sign_lefse_t1_t2[sub_sign_lefse_t1_t2$feature %in% t1_t2_diff_MO_eu, ]
+dim(lefse_fungi_t1_t2)
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+fungi_enriched_t1t2 <- lefse_fungi_t1_t2[, c("feature", "enrich_group")]
+```
+
+# Bacteria
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t1_t2_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% t1_t2_diff_MO,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t1_t2_diff_taxonomy_bacteria <- t1_t2_diff_taxonomy[t1_t2_diff_taxonomy$Kingdom %in% "Bacteria", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t1_t2_diff_MO_bact <- t1_t2_diff_taxonomy_bacteria$Species
+length(t1_t2_diff_MO_bact)
+```
+# Put this list of bacteria in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 61 MO that are present in the table
+lefse_bacteria_t1_t2 <- sub_sign_lefse_t1_t2[sub_sign_lefse_t1_t2$feature %in% t1_t2_diff_MO_bact, ]
+dim(lefse_bacteria_t1_t2)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+bacteria_enriched_t1t2 <- lefse_bacteria_t1_t2[, c("feature", "enrich_group")]
+dim(bacteria_enriched_t1t2)
+```
+
+# creation of the tables and put in the directory the MO enriched in t0 vs t1, and after thhat decided from the list which microorganism to put in the rpesentation
+```{r pressure, echo=FALSE, warning=FALSE}
+library(writexl)
+setwd(".../4_DA_pairwise_w_t/ENRICHED/t1vst2/")
+getwd()
+write_xlsx(lefse_bacteria_t1_t2, "bacteria_t1vst2.xlsx")
+write_xlsx(lefse_fungi_t1_t2, "fungi_t1vst2.xlsx")
+```
+
+T2 VS T3
+```{r pressure, echo=FALSE, warning=FALSE}
+# venn diagram
+library(readxl)
+library(readr)
+lefse <- read_excel(".../4_DA_pairwise_w_t/tab_LEfSe_T2_vs_T3.xlsx")
+deseq <- read_csv(".../4_DA_pairwise_w_t/deseqt2vst3.csv")
+maaslin <- read.delim("..../4_DA_pairwise_w_t/maaslin2/T2 vs T3/all_results.tsv")
+
+# keep only significant results of both the three tools, i.e. bacteria with p-value less than 0.5
+sign_lefse <- lefse[which(lefse$padj <= 0.05),]
+sign_deseq <- deseq[which(deseq$padj <= 0.05),]
+sign_maaslin <- maaslin[which(maaslin$pval <= 0.05),]
+
+# modify the names of maaslin, i.e. take away the point and put the space
+names_maaslin <- gsub("(?<!sp)\\.", " ", maaslin$feature, perl = TRUE)
+
+library(VennDiagram)
+venn.plot <- venn.diagram(
+  x = list(DESeq=sign_deseq$...1, lefse=sign_lefse$feature, maaslin2=names_maaslin),
+  filename=NULL,
+  fill = c("blue", "orange", "red"),
+  alpha = 0.6,
+  cex = 1.0,          # text size for numbers
+  cat.cex = 1.6,      # text size for set names
+  cat.col = c("blue", "orange", "red")  # colors for category labels
+)
+grid.newpage()     # Start a new grid page (important)
+grid.draw(venn.plot)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+t2_t3_diff_MO <- Reduce(intersect, list(DESeq=sign_deseq$...1, lefse=sign_lefse$feature, names_maaslin)) # check that the number of MOs in common is equal to the number 
+# found in the Venn diagram
+length(t2_t3_diff_MO) # yes 99 as the ones found in the venn diagram
+```
+
+# Now we filter the differential abundant MO for each pairwise timepoints
+# We see the differential Fungi and bacteria
+
+Extract from lefse result which ones have been found enriched in T0 and T1
+```{r pressure, echo=FALSE, warning=FALSE}
+# first we have to filter from the lefse result, the 119 MO
+sub_sign_lefse_t2_t3 <- sign_lefse[sign_lefse$feature %in% t2_t3_diff_MO,]
+dim(sub_sign_lefse_t2_t3)
+```
+
+# Fungi
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t2_t3_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% sub_sign_lefse_t2_t3$feature,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t2_t3_diff_taxonomy_eucaria <- t2_t3_diff_taxonomy[t2_t3_diff_taxonomy$Kingdom %in% "Eukaryota", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t2_t3_diff_MO_eu <- t2_t3_diff_taxonomy_eucaria$Species
+length(t2_t3_diff_MO_eu)
+```
+# Put this list of fungi in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 58 MO that are present in the table
+lefse_fungi_t2_t3 <- sub_sign_lefse_t2_t3[sub_sign_lefse_t2_t3$feature %in% t2_t3_diff_MO_eu, ]
+dim(lefse_fungi_t2_t3)
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+fungi_enriched_t2t3 <- lefse_fungi_t2_t3[, c("feature", "enrich_group")]
+dim(fungi_enriched_t2t3)
+```
+
+# Bacteria
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t2_t3_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% t2_t3_diff_MO,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t2_t3_diff_taxonomy_bacteria <- t2_t3_diff_taxonomy[t2_t3_diff_taxonomy$Kingdom %in% "Bacteria", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t2_t3_diff_MO_bact <- t2_t3_diff_taxonomy_bacteria$Species
+length(t2_t3_diff_MO_bact)
+```
+# Put this list of bacteria in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 61 MO that are present in the table
+lefse_bacteria_t2_t3 <- sub_sign_lefse_t2_t3[sub_sign_lefse_t2_t3$feature %in% t2_t3_diff_MO_bact, ]
+dim(lefse_bacteria_t2_t3)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+bacteria_enriched_t2t3 <- lefse_bacteria_t2_t3[, c("feature", "enrich_group")]
+dim(bacteria_enriched_t2t3)
+```
+
+# creation of the tables and put in the directory the MO enriched in t0 vs t1, and after thhat decided from the list which microorganism to put in the rpesentation
+```{r pressure, echo=FALSE, warning=FALSE}
+library(writexl)
+setwd(".../4_DA_pairwise_w_t/ENRICHED/t2vst3/")
+getwd()
+write_xlsx(lefse_bacteria_t2_t3, "bacteria_t2vst3.xlsx")
+write_xlsx(lefse_fungi_t2_t3, "fungi_t2vst3.xlsx")
+```
+
+
+T3 VS T5
+```{r pressure, echo=FALSE, warning=FALSE}
+# venn diagram
+library(readxl)
+library(readr)
+#lefse <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/tab_LEfSe_T3_vs_T5.xlsx")
+deseq <- read_csv(".../4_DA_pairwise_w_t/deseqt3vst5.csv")
+maaslin <- read.delim(".../4_DA_pairwise_w_t/maaslin2/T3 vs T5/all_results.tsv")
+
+# keep only significant results of both the three tools, i.e. bacteria with p-value less than 0.5
+# sign_lefse <- lefse[which(lefse$padj <= 0.05),]
+sign_deseq <- deseq[which(deseq$padj <= 0.05),]
+sign_maaslin <- maaslin[which(maaslin$pval <= 0.05),]
+
+# modify the names of maaslin, i.e. take away the point and put the space
+names_maaslin <- gsub("(?<!sp)\\.", " ", maaslin$feature, perl = TRUE)
+
+library(VennDiagram)
+venn.plot <- venn.diagram(
+  x = list(DESeq=sign_deseq$...1, maaslin2=names_maaslin),
+  filename=NULL,
+  fill = c("blue", "red"),
+  alpha = 0.6,
+  cex = 1.0,          # text size for numbers
+  cat.cex = 1.6,      # text size for set names
+  cat.col = c("blue", "red")  # colors for category labels
+)
+grid.newpage()     # Start a new grid page (important)
+grid.draw(venn.plot)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+t3_t5_diff_MO <- Reduce(intersect, list(DESeq=sign_deseq$...1, names_maaslin)) # check that the number of MOs in common is equal to the number 
+# found in the Venn diagram
+length(t3_t5_diff_MO) # yes 99 as the ones found in the venn diagram
+```
+
+# Now we filter the differential abundant MO for each pairwise timepoints
+# We see the differential Fungi and bacteria
+
+Extract from maaslin result which ones have been found enriched in T3 and T5
+```{r pressure, echo=FALSE, warning=FALSE}
+# first we have to filter from the lefse result, the 119 MO
+# Create dataframe
+df <- data.frame(
+  Microorganism = c(
+    "Gibbsiella quercinecans",
+    "Gluconobacter roseus",
+    "Herbaspirillum huttiense",
+    "Hymenobacter sp. BRD128",
+    "Oenococcus oeni",
+    "Apilactobacillus kunkeei",
+    "Fructobacillus americanaquae",
+    "Sozzivirus S13",
+    "Staphylococcus cohnii",
+    "Pseudomonas synxantha",
+    "Pseudomonas sp. HN8-3",
+    "Bacillus sp. 1NLA3E",
+    "Thermobifida alba"
+  ),
+  log2FoldChange = c(
+    -5.72429525225594,
+    -6.67110562675684,
+    1.79233076923763,
+    -7.44198603704231,
+    2.62631218957634,
+    -1.45411757882273,
+    -1.65451436303169,
+    9.06281072526921,
+    -1.42530141662589,
+    1.81470533973964,
+    1.66245819444934,
+    -6.55460861732942,
+    -8.48269643684794
+  ),
+  padj = c(
+    0.0438531774923058,
+    0.00606326720818792,
+    2.33566590030906e-05,
+    0.000239786333026497,
+    2.5543550918148e-05,
+    2.33566590030906e-05,
+    1.80535860583751e-19,
+    0.000554653726492403,
+    0.00317204303343861,
+    2.42940433527331e-10,
+    8.85818013130165e-16,
+    0.0068511927122607,
+    3.30961769211574e-06
+  )
+)
+
+# Add enrichment column
+df$Enriched_in <- ifelse(df$log2FoldChange > 0, "T5", "T3")
+
+# Select relevant columns
+result <- df[, c("Microorganism", "Enriched_in")]
+
+# View result
+print(result)
+```
+
+# Fungi
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t3_t5_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% df$Microorganism,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t3_t5_diff_taxonomy_eucaria <- t3_t5_diff_taxonomy[t3_t5_diff_taxonomy$Kingdom %in% "Eukaryota", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t3_t5_diff_MO_eu <- t3_t5_diff_taxonomy_eucaria$Species
+length(t3_t5_diff_MO_eu)
+```
+
+# Bacteria
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the taxonomy, merge on species name in common
+t3_t5_diff_taxonomy <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% df$Microorganism,] # take only the rows that have the microorganisms of our interest
+# the kingdoms that are present are: Bacteria, Eukaryota and Viruses
+
+t3_t5_diff_taxonomy_bacteria <- t3_t5_diff_taxonomy[t3_t5_diff_taxonomy$Kingdom %in% "Bacteria", ] 
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+t3_t5_diff_MO_bact <- t3_t5_diff_taxonomy_bacteria$Species
+length(t3_t5_diff_MO_bact)
+```
+
+# Put this list of bacteria in a table and also create another colum "Enriched in"
+```{r pressure, echo=FALSE, warning=FALSE}
+# take the 61 MO that are present in the table
+sub_df <- df[,c("Microorganism", "Enriched_in")]
+sub_df
+```
+
+
+# creation of the tables and put in the directory the MO enriched in t0 vs t1, and after thhat decided from the list which microorganism to put in the rpesentation
+```{r pressure, echo=FALSE, warning=FALSE}
+library(writexl)
+setwd(".../4_DA_pairwise_w_t/ENRICHED/t3vst5/")
+getwd()
+write_xlsx(sub_df, "bacteria_t3vst5.xlsx")
+```
+
+#### Metabolite analysis ####
+```{r pressure, echo=FALSE, warning=FALSE}
+MO_signif <- c(t0_t1_diff_MO,t1_t2_diff_MO,t2_t3_diff_MO,t3_t5_diff_MO)
+length(MO_signif)
+MO_sign_unique <- unique(MO_signif)
+common_DA <-  Reduce(intersect, list(t0_t1_diff_MO, t1_t2_diff_MO, t2_t3_diff_MO, t3_t5_diff_MO))
+length(common_DA)
+```
+
+Take away from the significant microorganisms found in the DA analsys the ones that are bacteria
+We will do the correlation analysis only with yeasts
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../4_DA_pairwise_w_t")
+# take the taxonomy, merge on species name in common
+sub_tab_taxa_in_otu <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% MO_sign_unique,] # take only the rows that have the microorganisms of our interest
+sub_tab_taxa_eukaryota <- sub_tab_taxa_in_otu[!sub_tab_taxa_in_otu$Kingdom %in% c("Bacteria", "Viruses"),] 
+sub_tab_taxa_eukaryota <- sub_tab_taxa_eukaryota[!sub_tab_taxa_eukaryota$Species %in% "Homo sapiens",]
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+sub_taxa <- sub_tab_taxa_eukaryota
+dim(sub_taxa)
+sub_species <- sub_taxa$Species
+MO_sign_unique <- sub_species
+length(MO_sign_unique)
+library(writexl)
+MO_sign_unique <- as.data.frame(MO_sign_unique)
+write_xlsx(MO_sign_unique, "MO_eu_DA.xlsx")
+```
+Now that we filter out the bacteria, we have 53 fungi species, to do the heatmap of the correlation
+
+# Creation of 4 excel tables with the microorganisms that have been resulted significant in all the three tools, and the value
+# of abundance in the different timings considered
+
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../4_DA_pairwise_w_t/results_MO_significant")
+getwd()
+# take the mean values (between replicates of the MO of interest)
+
+# take the filt_tab table with only the sample of wine
+sub_tab_filt <- filt_tab[rownames(filt_tab) %in% c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3","T2R1","T2R2", "T2R3", "T3R1", "T3R2","T3R3", "T5R2","T5R3"), ]
+
+mean_df_t0 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+mean_df_t1 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+
+for (col in t0_t1_diff_MO) {
+       col_mean_t0 = mean(sub_tab_filt[c("T0R1", "T0R2", "T0R3"), col])
+       mean_df_t0 <- rbind(mean_df_t0, data.frame(col = col, mean = col_mean_t0))
+       col_mean_t1 = mean(sub_tab_filt[c("T1R1", "T1R2", "T1R3"), col])
+       mean_df_t1 <- rbind(mean_df_t1, data.frame(col = col, mean = col_mean_t1))
+}
+colnames(mean_df_t0) <- c("MO", "T0")
+colnames(mean_df_t1) <- c("MO", "T1")
+final_df_t01 <- merge(mean_df_t0, mean_df_t1, by="MO")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+mean_df_t1 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+mean_df_t2 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+
+for (col in t1_t2_diff_MO) {
+       col_mean_t1 = mean(sub_tab_filt[c("T1R1", "T1R2", "T1R3"), col])
+       mean_df_t1 <- rbind(mean_df_t1, data.frame(col = col, mean = col_mean_t1))
+       col_mean_t2 = mean(sub_tab_filt[c("T2R1", "T2R2", "T2R3"), col])
+       mean_df_t2 <- rbind(mean_df_t2, data.frame(col = col, mean = col_mean_t2))
+}
+colnames(mean_df_t1) <- c("MO", "T1")
+colnames(mean_df_t2) <- c("MO", "T2")
+final_df_t12 <- merge(mean_df_t1, mean_df_t2, by="MO")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+mean_df_t2 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+mean_df_t3 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+
+for (col in t2_t3_diff_MO) {
+       col_mean_t2 = mean(sub_tab_filt[c("T2R1", "T2R2", "T2R3"), col])
+       mean_df_t2 <- rbind(mean_df_t2, data.frame(col = col, mean = col_mean_t2))
+       col_mean_t3 = mean(sub_tab_filt[c("T3R1", "T3R2", "T3R3"), col])
+       mean_df_t3 <- rbind(mean_df_t3, data.frame(col = col, mean = col_mean_t3))
+}
+colnames(mean_df_t2) <- c("MO", "T2")
+colnames(mean_df_t3) <- c("MO", "T3")
+final_df_t23 <- merge(mean_df_t2, mean_df_t3, by="MO")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+mean_df_t3 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+mean_df_t5 <- data.frame(col = character(), mean = numeric(), stringsAsFactors = FALSE)
+
+for (col in t3_t5_diff_MO) {
+       col_mean_t3 = mean(sub_tab_filt[c("T3R1", "T3R2", "T3R3"), col])
+       mean_df_t3 <- rbind(mean_df_t3, data.frame(col = col, mean = col_mean_t3))
+       col_mean_t5 = mean(sub_tab_filt[c("T5R2", "T5R3"), col])
+       mean_df_t5 <- rbind(mean_df_t5, data.frame(col = col, mean = col_mean_t5))
+}
+colnames(mean_df_t3) <- c("MO", "T3")
+colnames(mean_df_t5) <- c("MO", "T5")
+final_df_t35 <- merge(mean_df_t3, mean_df_t5, by="MO")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../4_DA_pairwise_w_t/results_MO_significant")
+getwd()
+library(writexl)
+write_xlsx(final_df_t01, "table_T0vsT1.xlsx")
+write_xlsx(final_df_t12, "table_T1vsT2.xlsx")
+write_xlsx(final_df_t23, "table_T2vsT3.xlsx")
+write_xlsx(final_df_t35, "table_T3vsT5.xlsx")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+length(final_df_t01$MO)
+length(final_df_t12$MO)
+length(final_df_t23$MO)
+length(final_df_t35$MO)
+MO_signif <- unique(c(final_df_t01$MO,final_df_t12$MO, final_df_t23$MO, final_df_t35$MO))
+```
+
+### Correlation between significant taxa and key metabolites
+### Kendall test
+```{r pressure, echo=FALSE, warning=FALSE}
+# Loading metabolite table
+metabolite <- read_excel("metabolomica.xlsx") # on the rows there are chemical compounds and on the columns there are samples, how to compute the correlation heatmap between microorganisms and chemical compounds. 
+# take the first row as name of columns, remove the second row
+colnames(metabolite) <- metabolite[1,]
+metabolite <- metabolite[-1,]
+metabolite_new <- metabolite[-1,]
+t_metabolite <- t(metabolite_new)
+colnames(t_metabolite) <- t_metabolite[1,]
+t_metabolite_new <- t_metabolite[-1,]
+head(t_metabolite_new)
+colnames(t_metabolite_new)
+```
+Take only specific rows in particular those related to wine, and in the same order that we found in the sub_w table
+```{r pressure, echo=FALSE, warning=FALSE}
+sub_metabolite_w <- t_metabolite_new[c("T0", "T1", "T2", "T3", "T5"),]
+```
+
+Convert cells in numeric type
+```{r pressure, echo=FALSE, warning=FALSE}
+t_metabolite_new <- data.frame(apply(sub_metabolite_w, 2, as.numeric))
+head(t_metabolite_new)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+# take from the metabolite table only the samples of our interest
+rownames(t_metabolite_new) <- c("T0", "T1", "T2", "T3", "T5")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+head(t_metabolite_new)
+rownames(t_metabolite_new)
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+# write the table in a file
+write_xlsx(t_metabolite_new, ".../8_Corr_Pathways_Metabolites/metabolite_table_modified.xlsx")
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+# take from the subw table only that microorganisms
+filt_tab_lef <- filt_tab[rownames(filt_tab) %in% c("T0R1", "T0R2", "T0R3", "T1R1", "T1R2", "T1R3", "T2R1", "T2R2", "T2R3", "T3R1", "T3R2", "T3R3", "T5R2", "T5R3"),]
+filt_tab_sub <- filt_tab_lef[,MO_sign_unique] # take only the Eukarya kingdom
+dim(filt_tab_sub)
+dim(t_metabolite_new)
+```
+
+Before running the test we have to average between replicates in the sub_w table
+```{r pressure, echo=FALSE, warning=FALSE}
+# Example data
+rownames(filt_tab_lef)
+group_ids <- c("T0", "T0", "T0", "T1", "T1", "T1", "T2", "T2", "T2", "T3", "T3", "T3", "T5", "T5")
+
+# Compute average per group
+filt_tab_lef$GroupID <- group_ids
+filt_tab_lef$RowNames <- NULL
+tab_avg <- aggregate(. ~ GroupID, data = filt_tab_lef, FUN = mean)
+rownames(tab_avg) <- tab_avg$GroupID
+tab_avg$GroupID <- NULL
+head(tab_avg)
+```
+
+Filter from this table the bacteria ones
+```{r pressure, echo=FALSE, warning=FALSE}
+otu_avg <- tab_avg[,colnames(tab_avg) %in% MO_sign_unique]
+dim(otu_avg)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+library(RColorBrewer)
+setwd(".../5_Corr_MO_Metabolomics/")
+getwd()
+
+# Ensure both are data frames
+t_metabolite_new <- as.data.frame(t_metabolite_new)
+otu_avg <- as.data.frame(otu_avg)
+
+# Correct dimensions
+results_tau  <- matrix(NA, nrow = ncol(t_metabolite_new), ncol = ncol(otu_avg))
+results_pval <- matrix(NA, nrow = ncol(t_metabolite_new), ncol = ncol(otu_avg))
+
+# Optional: add row/col names for clarity
+rownames(results_tau)  <- colnames(t_metabolite_new)
+colnames(results_tau)  <- colnames(otu_avg)
+rownames(results_pval) <- colnames(t_metabolite_new)
+colnames(results_pval) <- colnames(otu_avg)
+
+# Loop again
+for (i in seq_len(ncol(t_metabolite_new))) {
+  for (j in seq_len(ncol(otu_avg))) {
+    x <- as.numeric(as.character(t_metabolite_new[, i]))
+    y <- as.numeric(as.character(otu_avg[, j]))
+    test_result <- cor.test(x, y, method = "spearman", use = "pairwise.complete.obs")
+    results_tau[i, j]  <- test_result$estimate
+    results_pval[i, j] <- test_result$p.value
+  }
+}
+
+# 5. Convert to data frame if needed
+results_df <- as.data.frame(results_tau)
+write.table(results_df, "spearman_correlation.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+
+results_df <- as.data.frame(results_df)
+results_clean <- results_df
+results_clean[is.na(results_clean)] <- 0
+results_clean <- as.data.frame(results_clean)
+#results_clean[is.infinite(results_clean)] <- 0
+
+pheatmap(results_clean,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         main = "Spearman Correlation Heatmap",
+         fontsize = 8,            # overall font size
+         fontsize_row = 9,        # row labels (e.g., metabolites)
+         fontsize_col = 9)
+
+# Paleta sobria de colores
+n_groups <- length(unique(groups))
+colors <- brewer.pal(n = max(3, min(n_groups, 8)), name = "Set1")
+# Ajustar márgenes para espacio extra abajo
+par(mar = c(6, 4, 4, 2))  # más espacio en margen inferior
+# Gráfico con puntos coloreados por grupo
+groups <- sub("R[0-9]+$", "", rownames(pcoa$points))
+group_factor <- factor(groups)
+plot(pcoa$points[,1], pcoa$points[,2],
+     col = colors[group_factor], pch = 19,
+     xlab = paste0("PCoA1 (", round(100 * pcoa$eig[1] / sum(pcoa$eig), 1), "%)"),
+     ylab = paste0("PCoA2 (", round(100 * pcoa$eig[2] / sum(pcoa$eig), 1), "%)"), cex.axis=0.5)
+# Agregar leyenda debajo del gráfico, más separada del eje x
+legend("bottom", inset = -0.5,
+       legend = levels(group_factor),
+       col = colors, pch = 19,
+       horiz = TRUE, bty = "n", cex = 3, xpd = TRUE)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../5_Corr_MO_Metabolomics")
+# creation of the table for the significant correalations
+
+# 1. Find the positions of all cells with value < 0.05
+idx <- which(results_pval <= 0.1, arr.ind = TRUE)
+
+# 2. Build a new data frame with row names, column names, and values
+significant_df <- data.frame(
+  Row = rownames(results_pval)[idx[, 1]],
+  Column = colnames(results_pval)[idx[, 2]],
+  Value = results_tau[idx]
+)
+
+# 3. Inspect the result
+head(significant_df)
+colnames(significant_df) <- c("Metabolite", "MO", "Value")
+# save into a table
+library(writexl)
+write_xlsx(significant_df, "MO_corr_metab_eukarya.xlsx")
+corr_table <- significant_df
+```
+
+Things to do: try to make bigger the names of the nodes and shift the legend of the shape
+Representation of the correlation using a network to have a general overview
+```{r pressure, echo=FALSE, warning=FALSE}
+library(igraph)
+
+corr_table$color <- ifelse(corr_table$Value > 0, "red", "blue")
+
+# Create graph
+g <- graph_from_data_frame(d = corr_table, directed = FALSE)
+node_names <- V(g)$name
+node_type <- ifelse(node_names %in% corr_table$MO, "source", "target")
+V(g)$shape <- ifelse(node_type == "source", "square", "circle")
+V(g)$colour <- ifelse(node_type == "source", "olivedrab1", "orange")
+
+# Define edge weights (inverse of absolute correlation) for layout
+# Higher correlation = shorter edge
+E(g)$weight <- 1 / abs(E(g)$Value)
+
+# Use Fruchterman-Reingold layout with weights (to space nodes better)
+layout_fr <- layout_with_fr(g, weights = E(g)$weight, niter = 1000, grid = "nogrid")
+
+# Plot the network
+plot(g,
+     layout = layout_fr,
+     vertex.label.cex = 1.3,
+     vertex.label.font = 2.3,
+     vertex.label.color = "black",
+     vertex.size = 13,
+     vertex.color = V(g)$colour,
+     edge.color = E(g)$color,
+     vertex.shape = V(g)$shape,
+     main = "Microbe-Metabolite Correlation Network")
+
+# Correlation legend
+legend(x = 0.75, y = 0.8,
+       legend = c("Positive correlation", "Negative correlation"),
+       col = c("red", "blue"), lty = 1, lwd = 3, cex = 0.8, bty = "n",
+       seg.len = 1)
+
+# Node type legend
+legend("bottomright",
+       legend = c("Source", "Target"),
+       pch = 21,                     # filled circle
+       pt.bg = c("olivedrab1", "orange"), 
+       pt.cex = 1.5, bty = "n",
+       inset = c(0.1, 0))           # move slightly left
+
+```
+
+Representation of the correlation using a Chord plot to understand pairwise correlations
+```{r pressure, echo=FALSE, warning=FALSE}
+library(dplyr)
+library(readxl)
+library(Hmisc)
+library(circlize)
+library(circlize)
+
+chordDiagram(corr_table, annotationTrack = "grid", 
+             preAllocateTracks = 1)
+
+# Then add text manually on the first track:
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+    sector.name = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    # Add text horizontally
+    circos.text(mean(xlim), mean(ylim), sector.name, facing = "downward", niceFacing = TRUE, adj = c(0.5, 0.5), cex = 0.95)
+}, bg.border = NA)
+
+```
+Correlation metabolites and bacteria
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../4_DA_pairwise_w_t")
+MO_sign_unique <- unique(MO_signif)
+sub_tab_taxa_in_otu <- tab_taxa_in_otu[tab_taxa_in_otu$Species %in% MO_sign_unique,] # take only the rows that have the microorganisms of our interest
+sub_tab_taxa_bacteria <- sub_tab_taxa_in_otu[!sub_tab_taxa_in_otu$Kingdom %in% c("Eukaryota", "Viruses"),] 
+sub_tab_taxa_bacteria <- sub_tab_taxa_bacteria[!sub_tab_taxa_bacteria$Species %in% "Homo sapiens",]
+# take away the rows that have in the column kingdom the ones belonging to the Bacteria, and keep the vector of names in a variable
+sub_taxa <- sub_tab_taxa_bacteria
+dim(sub_taxa)
+sub_species <- sub_taxa$Species
+MO_sign_unique <- sub_species
+MO_sign_unique <- as.data.frame(MO_sign_unique)
+write_xlsx(MO_sign_unique, "MO_bact_DA.xlsx")
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+otu_avg <- tab_avg[,colnames(tab_avg) %in% MO_sign_unique]
+dim(otu_avg)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+library(RColorBrewer)
+setwd(".../5_Corr_MO_Metabolomics/")
+getwd()
+# 3. Initialize a matrix to store results
+# Ensure both are data frames
+t_metabolite_new <- as.data.frame(t_metabolite_new)
+otu_avg <- as.data.frame(otu_avg)
+
+# Correct dimensions
+results_tau  <- matrix(NA, nrow = ncol(t_metabolite_new), ncol = ncol(otu_avg))
+results_pval <- matrix(NA, nrow = ncol(t_metabolite_new), ncol = ncol(otu_avg))
+
+# Optional: add row/col names for clarity
+rownames(results_tau)  <- colnames(t_metabolite_new)
+colnames(results_tau)  <- colnames(otu_avg)
+rownames(results_pval) <- colnames(t_metabolite_new)
+colnames(results_pval) <- colnames(otu_avg)
+
+# Loop again
+for (i in seq_len(ncol(t_metabolite_new))) {
+  for (j in seq_len(ncol(otu_avg))) {
+    x <- as.numeric(as.character(t_metabolite_new[, i]))
+    y <- as.numeric(as.character(otu_avg[, j]))
+    test_result <- cor.test(x, y, method = "spearman", use = "pairwise.complete.obs")
+    results_tau[i, j]  <- test_result$estimate
+    results_pval[i, j] <- test_result$p.value
+  }
+}
+
+# 5. Convert to data frame if needed
+results_df <- as.data.frame(results_tau)
+write.table(results_df, "spearman_correlation.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+
+results_clean <- results_df
+results_clean[is.na(results_clean)] <- 0
+#results_clean[is.infinite(results_clean)] <- 0
+
+pheatmap(results_clean,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         main = "Spearman Correlation Heatmap",
+         fontsize = 8,            # overall font size
+         fontsize_row = 9,        # row labels (e.g., metabolites)
+         fontsize_col = 9)
+
+# Paleta sobria de colores
+n_groups <- length(unique(groups))
+colors <- brewer.pal(n = max(3, min(n_groups, 8)), name = "Set1")
+# Ajustar márgenes para espacio extra abajo
+par(mar = c(6, 4, 4, 2))  # más espacio en margen inferior
+# Gráfico con puntos coloreados por grupo
+groups <- sub("R[0-9]+$", "", rownames(pcoa$points))
+group_factor <- factor(groups)
+plot(pcoa$points[,1], pcoa$points[,2],
+     col = colors[group_factor], pch = 19,
+     xlab = paste0("PCoA1 (", round(100 * pcoa$eig[1] / sum(pcoa$eig), 1), "%)"),
+     ylab = paste0("PCoA2 (", round(100 * pcoa$eig[2] / sum(pcoa$eig), 1), "%)"), cex.axis=0.5)
+# Agregar leyenda debajo del gráfico, más separada del eje x
+legend("bottom", inset = -0.5,
+       legend = levels(group_factor),
+       col = colors, pch = 19,
+       horiz = TRUE, bty = "n", cex = 3, xpd = TRUE)
+```
+
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd(".../5_Corr_MO_Metabolomics")
+# creation of the table for the significant correalations
+
+# 1. Find the positions of all cells with value < 0.05
+idx <- which(results_pval < 0.05, arr.ind = TRUE)
+
+# 2. Build a new data frame with row names, column names, and values
+significant_df <- data.frame(
+  Row = rownames(results_pval)[idx[, 1]],
+  Column = colnames(results_pval)[idx[, 2]],
+  Value = results_tau[idx]
+)
+
+# 3. Inspect the result
+head(significant_df)
+colnames(significant_df) <- c("Metabolite", "MO", "Value")
+# save into a table
+library(writexl)
+write_xlsx(significant_df, "MO_cor_metab_bact.xlsx")
+corr_table <- significant_df
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+library(igraph)
+
+corr_table$color <- ifelse(corr_table$Value > 0, "red", "blue")
+
+# Create graph
+g <- graph_from_data_frame(d = corr_table, directed = FALSE)
+node_names <- V(g)$name
+node_type <- ifelse(node_names %in% corr_table$MO, "source", "target")
+V(g)$shape <- ifelse(node_type == "source", "square", "circle")
+V(g)$colour <- ifelse(node_type == "source", "olivedrab1", "orange")
+
+# Define edge weights (inverse of absolute correlation) for layout
+# Higher correlation = shorter edge
+E(g)$weight <- 1 / abs(E(g)$Value)
+
+# Use Fruchterman-Reingold layout with weights (to space nodes better)
+layout_fr <- layout_with_fr(g, weights = E(g)$weight, niter = 1000, grid = "nogrid")
+
+# Plot the network
+plot(g,
+     layout = layout_fr,
+     vertex.label.cex = 0.8,
+     vertex.label.font = 2.3,
+     vertex.label.color = "black",
+     vertex.size = 13,
+     vertex.color = V(g)$colour,
+     edge.color = E(g)$color,
+     vertex.shape = V(g)$shape,
+     main = "Microbe-Metabolite Correlation Network")
+
+# Correlation legend
+legend(x = 1.2, y = 0.8,
+       legend = c("Positive correlation", "Negative correlation"),
+       col = c("red", "blue"), lty = 1, lwd = 3, cex = 0.8, bty = "n",
+       seg.len = 1)
+
+# Node type legend
+legend("bottomright",
+       legend = c("Source", "Target"),
+       pch = 21,                     # filled circle
+       pt.bg = c("olivedrab1", "orange"), 
+       pt.cex = 1.5, bty = "n",
+       inset = c(0.1, 0))           # move slightly left
+```
+
+Things to do: try to make bigger the names of the nodes and shift the legend of the shape
+Representation of the correlation using a network to have a general overview
+
+```{r pressure, echo=FALSE, warning=FALSE}
+library(dplyr)
+library(readxl)
+library(Hmisc)
+library(circlize)
+library(circlize)
+
+chordDiagram(corr_table, annotationTrack = "grid", 
+             preAllocateTracks = 1)
+
+# Then add text manually on the first track:
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+    sector.name = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    # Add text horizontally
+    circos.text(mean(xlim), mean(ylim), sector.name, facing = "downward", niceFacing = TRUE, adj = c(0.5, 0.5), cex = 0.7)
+}, bg.border = NA)
+
+```
