@@ -1,0 +1,288 @@
+---
+title: "CO_pathways_metabolites"
+output: html_document
+date: "2025-10-17"
+---
+
+```{r setup, include=FALSE}
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/8_Corr_Pathways_Metabolites")
+getwd()
+```
+
+METABOLITE TABLE
+```{r cars}
+# read pathways table
+library(readxl)
+pathways <- read_excel("table_pathways.xlsx")
+# read metabolites table
+metabolites<- read_excel("metabolite_table_modified.xlsx")
+metabolites <- as.data.frame(metabolites)
+rownames(metabolites) <- c("SWT0", "SWT1", "SWT2", "SWT3", "SWT5")
+head(pathways)
+head(metabolites)
+```
+
+Follwing the approach that we did for the correlation microorganisms-metabolites...
+
+Modify the PATHWAY TABLE
+```{r pressure, echo=FALSE}
+pathways <- as.data.frame(pathways)
+rownames(pathways) <- pathways$RowName
+pathways <- as.data.frame(pathways)
+pathways$RowName <- NULL
+head(pathways)
+dim(pathways)
+```
+
+Subset even further by considering only the SIGNIFICANT PATHWAYS that differ between time points
+```{r pressure, echo=FALSE}
+# read the significant pathways 
+sign_path <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/8_Corr_Pathways_Metabolites/unique_pathways.xlsx")
+
+# take from the table of the pathways only the ones that have been found significant 
+new_pathways <- pathways[which(rownames(pathways) %in% sign_path$unique_pathways), ]
+dim(new_pathways)
+# among these pathways chose the ones that are related to alcoholic fermentation in wine
+rownames(new_pathways)
+```
+
+Transpose the matrix of the pathways
+```{r pressure, echo=FALSE}
+name_path <- rownames(new_pathways)
+t_pathways <- t(new_pathways)
+dim(t_pathways)
+head(t_pathways)
+```
+
+Take the mean of all the three replicates
+```{r pressure, echo=FALSE}
+t_pathways <- as.data.frame(t_pathways)
+t_pathways$group <- c("SWT0", "SWT0", "SWT0", "SWT1", "SWT1", "SWT1", "SWT2", "SWT2", "SWT2", "SWT3", "SWT3", "SWT3", "SWT5", "SWT5", "SWT5")
+head(t_pathways)
+avg_path <- aggregate(. ~ group, data = t_pathways, FUN = mean)
+rownames(avg_path) <- avg_path$group
+avg_path$group <- NULL
+head(avg_path)
+dim(avg_path)
+```
+```{r pressure, echo=FALSE}
+head(avg_path)
+head(metabolites)
+dim(avg_path)
+dim(metabolites)
+```
+The sample size is small, surely data are non-normal, 
+we use the Pearson correlation test.
+1. compute Spearman correlations
+2. compute p-values
+3. Adjust for multiple testing (FDR)
+4. Select significant correlations
+5. Visualize as heatmap
+```{r pressure, echo=FALSE, warning=FALSE}
+library(RColorBrewer)
+library(pheatmap)
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/8_Corr_Pathways_Metabolites/")
+getwd()
+
+# Ensure both are data frames
+metabolites <- as.data.frame(metabolites)
+avg_path <- as.data.frame(avg_path)
+
+# Correct dimensions
+results_tau  <- matrix(NA, nrow = ncol(metabolites), ncol = ncol(avg_path))
+results_pval <- matrix(NA, nrow = ncol(metabolites), ncol = ncol(avg_path))
+
+# Optional: add row/col names for clarity
+rownames(results_tau)  <- colnames(metabolites)
+colnames(results_tau)  <- colnames(avg_path)
+rownames(results_pval) <- colnames(metabolites)
+colnames(results_pval) <- colnames(avg_path)
+
+#otu_avg <- otu_avg[, colnames(otu_avg) %in% cols_to_keep]
+
+# 4. Loop over all compound-microbe pairs and compute Kendall's tau
+for (i in seq_len(ncol(metabolites))) {
+  for (j in seq_len(ncol(avg_path))) {
+    x <- as.numeric(as.character(metabolites[, i]))
+    y <- as.numeric(as.character(avg_path[, j]))
+    test_result <- cor.test(x, y, method = "kendall", use = "pairwise.complete.obs")
+    results_tau[i, j]  <- test_result$estimate
+    results_pval[i, j] <- test_result$p.value
+  }
+}
+
+# 5. Convert to data frame if needed
+results_df <- as.data.frame(results_tau)
+write.table(results_df, "kendall_correlation.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+
+results_clean <- results_df
+results_clean[is.na(results_clean)] <- 0
+#results_clean[is.infinite(results_clean)] <- 0
+
+pheatmap(results_clean,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         main = "Kendall Correlation Heatmap",
+         fontsize = 8,            # overall font size
+         fontsize_row = 9,        # row labels (e.g., metabolites)
+         fontsize_col = 9)
+
+# Paleta sobria de colores
+n_groups <- length(unique(groups))
+colors <- brewer.pal(n = max(3, min(n_groups, 8)), name = "Set1")
+# Ajustar márgenes para espacio extra abajo
+par(mar = c(6, 4, 4, 2))  # más espacio en margen inferior
+# Gráfico con puntos coloreados por grupo
+groups <- sub("R[0-9]+$", "", rownames(pcoa$points))
+group_factor <- factor(groups)
+plot(pcoa$points[,1], pcoa$points[,2],
+     col = colors[group_factor], pch = 19,
+     xlab = paste0("PCoA1 (", round(100 * pcoa$eig[1] / sum(pcoa$eig), 1), "%)"),
+     ylab = paste0("PCoA2 (", round(100 * pcoa$eig[2] / sum(pcoa$eig), 1), "%)"), cex.axis=0.5)
+# Agregar leyenda debajo del gráfico, más separada del eje x
+legend("bottom", inset = -0.5,
+       legend = levels(group_factor),
+       col = colors, pch = 19,
+       horiz = TRUE, bty = "n", cex = 3, xpd = TRUE)
+```
+Take from the table only the significant results
+```{r pressure, echo=FALSE, warning=FALSE}
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/8_Corr_Pathways_Metabolites/")
+# creation of the table for the significant correalations
+
+# 1. Find the positions of all cells with value < 0.05
+idx <- which(results_pval <= 0.1, arr.ind = TRUE)
+
+# 2. Build a new data frame with row names, column names, and values
+significant_df <- data.frame(
+  Row = rownames(results_pval)[idx[, 1]],
+  Column = colnames(results_pval)[idx[, 2]],
+  Value = results_tau[idx]
+)
+
+# 3. Inspect the result
+head(significant_df)
+colnames(significant_df) <- c("Metabolite", "MO", "Value")
+# save into a table
+library(writexl)
+write_xlsx(significant_df, "metab_pathways_sign_correlation.xlsx")
+corr_table <- significant_df
+```
+
+Things to do: try to make bigger the names of the nodes and shift the legend of the shape
+Representation of the correlation using a network to have a general overview
+```{r pressure, echo=FALSE, warning=FALSE}
+library(igraph)
+
+corr_table$color <- ifelse(corr_table$Value > 0, "red", "blue")
+
+# Create graph
+g <- graph_from_data_frame(d = corr_table, directed = FALSE)
+node_names <- V(g)$name
+node_type <- ifelse(node_names %in% corr_table$MO, "source", "target")
+V(g)$shape <- ifelse(node_type == "source", "square", "circle")
+V(g)$colour <- ifelse(node_type == "source", "olivedrab1", "orange")
+
+# Define edge weights (inverse of absolute correlation) for layout
+# Higher correlation = shorter edge
+E(g)$weight <- 1 / abs(E(g)$Value)
+
+# Use Fruchterman-Reingold layout with weights (to space nodes better)
+layout_fr <- layout_with_fr(g, weights = E(g)$weight, niter = 1000, grid = "nogrid")
+
+# Plot the network
+plot(g,
+     layout = layout_fr,
+     vertex.label.cex = 1.3,
+     vertex.label.font = 2.3,
+     vertex.label.color = "black",
+     vertex.size = 13,
+     vertex.color = V(g)$colour,
+     edge.color = E(g)$color,
+     vertex.shape = V(g)$shape,
+     main = "Metabolite-Pathway Correlation Network")
+
+# Correlation legend
+legend(x = 1.2, y = 0.8,
+       legend = c("Positive correlation", "Negative correlation"),
+       col = c("red", "blue"), lty = 1, lwd = 3, cex = 0.8, bty = "n",
+       seg.len = 1)
+
+# Node type legend
+legend("bottomright",
+       legend = c("Source", "Target"),
+       pch = 21,                     # filled circle
+       pt.bg = c("olivedrab1", "orange"), 
+       pt.cex = 1.5, bty = "n",
+       inset = c(0.1, 0))           # move slightly left
+```
+```{r pressure, echo=FALSE, warning=FALSE}
+library(dplyr)
+library(readxl)
+library(Hmisc)
+library(circlize)
+library(circlize)
+
+chordDiagram(corr_table, annotationTrack = "grid", 
+             preAllocateTracks = 1)
+
+# Then add text manually on the first track:
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+    sector.name = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    # Add text horizontally
+    circos.text(mean(xlim), mean(ylim), sector.name, facing = "downward", niceFacing = TRUE, adj = c(0.5, 0.5), cex = 0.95)
+}, bg.border = NA)
+```
+
+########################################################
+
+We try to use a model that takes into consideration the replicates of the pathways (Mixed-effects modeling)
+```{r pressure, echo=FALSE, warning=FALSE}
+pathways_r <- read_excel("table_pathways.xlsx")
+rownames(pathways_r) <- pathways_r$RowName
+# subset from this only the pathways of our interest 
+pathways_r_new <- pathways_r[which(rownames(pathways_r) %in% fermentation_pathways),]
+rows_name <- pathways_r_new$RowName
+pathways_r_new$RowName <- NULL
+```
+
+Delete a column
+```{r pressure, echo=FALSE, warning=FALSE}
+rownames(pathways_r_new) <- rows_name
+head(pathways_r_new)
+```
+
+Transpose the matrix
+```{r pressure, echo=FALSE, warning=FALSE}
+t_pathways_r_new <- t(pathways_r_new)
+head(t_pathways_r_new)
+t_pathways_r_new <- as.data.frame(t_pathways_r_new)
+head(t_pathways_r_new)
+```
+
+Map replicates to sample groups
+```{r pressure, echo=FALSE, warning=FALSE}
+t_pathways_r_new$sample <- str_extract(rownames(t_pathways_r_new), "^T\\d+")
+print(t_pathways_r_new$sample)
+
+t_metabolite_new$sample <- str_remove(rownames(t_metabolite_new), "^SW")
+head(t_metabolite_new)
+```
+
+Merge pathway and metabolite data by sample
+```{r pressure, echo=FALSE, warning=FALSE}
+library(tidyr)
+
+pathways_long <- t_pathways_r_new %>%
+  pivot_longer(-sample, names_to = "pathway", values_to = "pathway_value")
+
+metabolites_long <- t_metabolite_new %>%
+  pivot_longer(-sample, names_to = "metabolite", values_to = "metabolite_value")
+
+data_combined <- inner_join(pathways_long, metabolites_long, by = "sample")
+
+head(data_combined)
+```

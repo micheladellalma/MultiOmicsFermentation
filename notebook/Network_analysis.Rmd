@@ -1,0 +1,79 @@
+---
+title: "Network Analysis"
+output: html_document
+date: "2025-10-15"
+---
+
+We will do two networks, one for bacteria and one for yeasts
+
+Loading of the packages
+```{r setup, include=FALSE}
+library(readxl)
+library(writexl)
+library(igraph)
+library(pheatmap)
+```
+
+
+now we will create a table with different columns:
+- one column with all the MO
+- one column with all the times associated to each MO
+- one column with the pathways associated to the time
+- one column with the metabolites associated with the microorganisms (or the time?)
+
+N.B. THINGS THAT CAN BE ADDEED IN THE NETWORK:
+CORRELATION BETWEEN MICOORGANISMS IN EACH SPECIFIC FERMENTATION TIME (heatmap correlation between microorganisms)
+in this way we have for each time: 
+1. correlation MO-MO
+2. correlation MO-metabolite
+3. correlation MO-pathway
+
+Set the working directory
+```{r cars}
+setwd("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/")
+getwd()
+```
+
+```{r cars}
+# take all significant microorganisms from the differential abundance analysis
+t01_bacteria <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t0vst1/bacteria_t0vst1.xlsx")
+t01_fungi <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t0vst1/fungi_t0vst1.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+t12_bacteria <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t1vst2/bacteria_t1vst2.xlsx")
+t12_fungi <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t1vst2/fungi_t1vst2.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+t23_bacteria <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t2vst3/bacteria_t2vst3.xlsx")
+t23_fungi <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t2vst3/fungi_t2vst3.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+t35_bacteria <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t3vst5/bacteria_t3vst5.xlsx")
+#t35_fungi <- read_excel("/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/4_DA_pairwise_w_t/ENRICHED/t3vst5/fungi_t3vst5.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+# take all the fungi and create a table in which in one column there are microorganisms, and another one in which there are the times of enrichment
+t01_fungi_sub <- t01_fungi[, c("feature", "enrich_group")]
+t12_fungi_sub <- t12_fungi[,c("feature", "enrich_group")]
+t23_fungi_sub <- t23_fungi[,c("feature", "enrich_group")]
+
+total_fungi <- rbind(t01_fungi_sub, t12_fungi_sub, t23_fungi_sub)
+
+write_xlsx(total_fungi, path = "/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/10_Network_analysis/data_triangle/eukaryotes_in_time.xlsx")
+```
+
+```{r pressure, echo=FALSE}
+# take all the fungi and create a table in which in one column there are microorganisms, and another one in which there are the times of enrichment
+t01_bacteria_sub <- t01_bacteria[, c("feature", "enrich_group")]
+t12_bacteria_sub <- t12_bacteria[,c("feature", "enrich_group")]
+t23_bacteria_sub <- t23_bacteria[,c("feature", "enrich_group")]
+colnames(t35_bacteria) <- c("feature", "enrich_group")
+
+total_bacteria <- rbind(t01_bacteria_sub, t12_bacteria_sub, t23_bacteria_sub, t35_bacteria)
+
+write_xlsx(total_bacteria, path = "/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/michela_0/Savorgnano/10_Network_analysis/data_triangle/bacteria_in_time.xlsx")
+```
