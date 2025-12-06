@@ -34,4 +34,4 @@ For the initial steps of pre-processing and taxonomic classification...
 ## Repository structure
 - /scripts folder contains only executable codes from the command line.
 - /notebook folder contains Rmd and Jupyter analysis with descriptive parts and figures.
-- /data folder contains all the data.
+- /data folder contains all the data. (available only in the private version of this repository)
