@@ -4,7 +4,7 @@ library(dplyr)
 library(tidyr)
 library(stringr)
 
-file_path="/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/bracken"
+file_path="/bracken"
 
 # Function to parse a single report file and reconstruct lineage
 parse_report_file <- function(file_path) {
@@ -67,7 +67,7 @@ parse_report_file <- function(file_path) {
 
 #### process all files ####
  # Directory containing all your Bracken/Kraken report files
-report_dir <- "/Users/micheladellalma/Library/CloudStorage/OneDrive-UniversitàdegliStudidiMilano/bracken"
+report_dir <- "bracken"
 
 # Get all .txt files in that folder
 report_files <- list.files(report_dir, pattern = "\\.report$", full.names = TRUE)
