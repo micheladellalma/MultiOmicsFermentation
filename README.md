@@ -28,7 +28,8 @@ Among the different steps of the pipeline:
 
 
 ## How to use
-There is the master script that orchestrate all the scripts that have to be used, it is important to put in the master script the input files required, and to create a specific tree of directories (before each .
+There is the master script that orchestrate all the scripts that have to be used, it is important to put in the master script the input files required, 
+and to create a specific tree of directories, that is explained in the master script before each command.
 
 ## Repository structure
 - /scripts folder contains only executable codes from the command line.
