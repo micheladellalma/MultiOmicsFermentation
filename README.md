@@ -31,6 +31,8 @@ Among the different steps of the pipeline:
 There is the master script that orchestrate all the scripts that have to be used, it is important to put in the master script the input files required, 
 and to create a specific tree of directories (starting from the working directory), that is explained in the master script before each command.
 
+The output of the scripts are figures and tables and will be saved in the correspondent folders at each stage of the analysis.
+
 ## Repository structure
 - /scripts folder contains only executable codes from the command line.
 - /notebook folder contains Rmd and Jupyter analysis with descriptive parts and figures.
