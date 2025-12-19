@@ -1,0 +1,190 @@
+---
+title: "pathway_annotation"
+params:
+  kma_table: NULL
+  eggnog_table: NULL
+  sample_name: NULL
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-06-18"
+---
+
+
+## Define as variables the parameters given as input (abundance and taxonomy tables)
+```{r}
+kma_table <- params$kma_table
+eggnong_table <- params$eggnog_table
+sample_name <- params$sample_name
+```
+
+## Loading of the libraries
+```{r setup, include=FALSE}
+library(clusterProfiler)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+## AIM: Convert KEGG pathways id into description of pathways
+- pathway identifiers: combination of 2-4 letter prefix code and 5 digit number
+- the prefix could have different meaning:
+map: manually drawn reference pathway identifiers
+ko: reference pathway highlighting KOs
+
+We will take the name that has the prefix ko, since it is easier to search 
+the correspondent pathway name
+
+Starting reading the tables, of the gene expression and pathway annotation
+```{r pressure, echo=FALSE}
+kma_table <- read_excel(kma_table) # the kma output is modified in order
+egg_nog_table <- read_excel(egg_nog_table)
+```
+
+Take from the eggnog table the name of the query gene
+```{r pressure, echo=FALSE}
+col_keep_egg <- c("#query", "KEGG_ko", "KEGG_Pathway")
+# add the information of the ko names as a 2nd column
+sub_eggnog_table <- egg_nog_table[, colnames(egg_nog_table) %in% col_keep_egg]
+head(sub_eggnog_table)
+```
+
+We want to decide which columns of name to keep, we will see how many NA values there are in the two columns
+```{r pressure, echo=FALSE}
+library(dplyr)
+
+sub_eggnog_table %>%
+  mutate(KEGG_Pathway = as.character(KEGG_Pathway)) %>%
+  summarise(count_missing = sum(KEGG_Pathway == "-" | is.na(KEGG_Pathway)))
+```
+The initial table has a dimension of 56635 and after filtering for na values and "-", the table has 14312
+
+Look at the other column
+```{r pressure, echo=FALSE}
+sub_eggnog_table %>%
+  mutate(KEGG_ko = as.character(KEGG_ko)) %>%
+  summarise(count_missing = sum(KEGG_ko == "-" | is.na(KEGG_ko)))
+```
+There are much more elements missing in the KEGG_Pathway column
+```{r pressure, echo=FALSE}
+sub_eggnog_table$KEGG_ko <- NULL
+```
+
+EGGNOG TABLE:
+For each gene i have the correspondent KEGG pathway
+
+Assigning column names to kma table and eggnog table
+Important to call with the same name the column Gene in order to do the merge later
+```{r pressure, echo=FALSE}
+colnames(kma_table) <- c("Genes", "Depth")
+colnames(sub_eggnog_table) <- c("Genes", "KEGG_Pathway")
+head(kma_table)
+```
+KMA TABLE:
+for each gene i have the correspondent Depth
+
+Modify the gene names, in order to take away the last underscore and the final number after the last underscore
+```{r pressure, echo=FALSE}
+norm_names_kma <- sub("(_[^_]+)_.*", "\\1", kma_table$Genes)
+norm_names_eggnog <- sub("(_[^_]+)_.*", "\\1", sub_eggnog_table$Genes)
+head(norm_names_kma)
+head(norm_names_eggnog)
+```
+
+Reassignment of the gene names
+```{r pressure, echo=FALSE}
+kma_table$Genes <- norm_names_kma
+sub_eggnog_table$Genes <-  norm_names_eggnog
+```
+
+Concatenate the pathways present in the same gene and put them in the same row (EGGNOG TABLE)
+This is useful because the next step is to unify the informations of the KMA and EGGNOG table, based on the gene names
+```{r pressure, echo=FALSE}
+# Group by gene and concatenate description
+collapsed_eggnog_t0r1 <- sub_eggnog_table %>%
+  group_by(Genes) %>% 
+  summarise(Description = paste(unique(KEGG_Pathway), collapse = "; "), .groups = "drop")
+
+collapsed_eggnog_new_t0r1 <- collapsed_eggnog_t0r1[-c(1,2,3),]
+
+collapsed_kma_t0r1 <- kma_table %>%
+  group_by(Genes) %>%
+  summarise(Depth = sum(Depth)) %>%
+  ungroup()
+
+head(collapsed_eggnog_new_t0r1) 
+head(collapsed_kma_t0r1)
+```
+
+Now we take together the two tables based on the gene names
+```{r pressure, echo=FALSE}
+finaltab_t0r1 <- left_join(collapsed_kma_t0r1, collapsed_eggnog_t0r1, by = "Genes")
+dim(collapsed_kma_t0r1)
+dim(collapsed_eggnog_t0r1)
+dim(finaltab_t0r1)
+head(finaltab_t0r1)
+```
+
+Take away the entries that in the Description column have na values or "-" sign
+```{r pressure, echo=FALSE}
+# delete all the rows that have NA values in the column "Description"
+finaltab_t0r1_cleaned <- finaltab_t0r1 %>%
+  filter(!is.na(Description) & Description != "-")
+dim(finaltab_t0r1_cleaned)
+head(finaltab_t0r1_cleaned)
+```
+
+Finaltab_t0r1_cleaned is the table that has all the informations
+```{r pressure, echo=FALSE}
+# split in the column Description vector of strings into different rows and delete the id that starts with map
+df_cleaned <- finaltab_t0r1_cleaned %>%
+  # Split the values column into a list
+  separate_rows(Description, sep = "[,;]") %>%
+  # Remove values that start with "map"
+  filter(!str_starts(Description, "map"))
+head(df_cleaned)
+```
+
+```{r pressure, echo=FALSE}
+df_cleaned_new <- df_cleaned %>%
+  filter(Description != " -" & Description != "-")
+
+# trim blank spaces before and after the KEGG ids
+df_cleaned_new$Description <- str_trim(df_cleaned_new$Description)
+unique(df_cleaned_new$Description)
+head(df_cleaned_new)
+```
+
+```{r pressure, echo=FALSE}
+# now we want to convert this list of KEGG ids into pathways description
+# unsing clusterProfiler package
+
+ko.pathways <- download_KEGG(species="ko") # download the repository where there are KEGG terms, ids and names
+term2name <- ko.pathways$KEGGPATHID2NAME
+colnames(term2name) <- c("Description", "Pathway")
+head(term2name)
+```
+
+Creation of the final table with the Description and the TotalDepth
+```{r pressure, echo=FALSE}
+# merge the table df_cleaned_new$Description with term2name table
+merged_R1 <- merge(df_cleaned_new, term2name, by="Description")
+dim(df_cleaned_new)
+
+# group by pathways, and sum all depths
+merged_R1_grouped <- merged_R1 %>%
+  group_by(Pathway) %>%
+  summarise(TotalDepth = sum(Depth), .groups = "drop")
+
+head(merged_R1_grouped)
+```
+
+Save the final table into an excel file
+```{r pressure, echo=FALSE}
+path <- file.path("results/1_Pathway_annotation/tables/KEGG_path", paste0(sample_name, ".xlsx"))
+```
+
+```{r pressure, echo=FALSE}
+write_xlsx(merged_R1_grouped, path, col_names = TRUE, format_headers = TRUE)
+```
