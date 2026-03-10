@@ -1,5 +1,5 @@
 # multiomics-fermentation-pipeline
-MuliOmicsFermentation is a workflow for identifying the dynamics of microorganisms, pathways and metabolites throughout the fermentation process.
+MuliOmicsFermentation is a workflow for identifying the dynamics of microorganisms, pathways and metabolites throughout the fermentation process in a Picolit variety.
 The final output is a multi-layered network, where each layer corresponds to a different time point during fermentation.
 
 This workflow leverages multiple programming languages, including R, Python, and Bash.
@@ -35,4 +35,5 @@ The output of the scripts are figures and tables and will be saved in the corres
 ## 🗃️ Repository structure
 - /scripts folder contains only executable codes from the command line.
 - /notebook folder contains Rmd and Jupyter analysis with descriptive parts and figures.
-- /data folder contains all the data. (available only in the private version of this repository)
+- /example_data folder contains all the data. (available only in the private version of this repository)
+- /results
