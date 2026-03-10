@@ -53,7 +53,7 @@ The output of the scripts are figures and tables and will be saved in the corres
 - /example_data folder contains all the data. (available only in the private version of this repository)
 - /results
 
-## Key analysis implemented
+## :key: Key analysis implemented
 - taxonomic profiling of bacterial and fungal communities
 - functional pathway reconstruction from metagenomic data
 - integration of taxonomic, functional, and metabolic layers
