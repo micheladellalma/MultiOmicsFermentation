@@ -40,6 +40,17 @@ Among the different steps of the pipeline:
 - correlation and network objects/figures
 
 **Software/dependencies**
+- FastQC
+- MultiQC
+- KneadData
+- Kraken2 + Braken
+- MEGAHIT
+- Prodigal
+- CD-HIT
+- eggNOG-mapper
+- R (vegan, phyloseq, clusterProfiler)
+- Python
+- Bash
 
 ## :gear: How to use
 There is the master script that orchestrate all the scripts that have to be used, it is important to put in the master script the input files required, 
