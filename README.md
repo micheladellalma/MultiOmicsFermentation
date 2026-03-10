@@ -25,7 +25,7 @@ Among the different steps of the pipeline:
 
 <img width="349" height="208" alt="image" src="https://github.com/user-attachments/assets/a84b81d0-b2aa-49e6-b27c-e444886931e1" />
 
-## Pipeline Inputs, Outputs and Dependencies
+## :inbox_tray: :outbox_tray: Pipeline Inputs, Outputs and Dependencies
 **Input**
 - pair-end FASTQ files
 - metadata table
