@@ -52,3 +52,10 @@ The output of the scripts are figures and tables and will be saved in the corres
 - /notebook folder contains Rmd and Jupyter analysis with descriptive parts and figures.
 - /example_data folder contains all the data. (available only in the private version of this repository)
 - /results
+
+## Key analysis implemented
+- taxonomic profiling of bacterial and fungal communities
+- functional pathway reconstruction from metagenomic data
+- integration of taxonomic, functional, and metabolic layers
+- diversity, ordination, and differential abundance analyses
+- microbial-metabolite-pathway network reconstruction
