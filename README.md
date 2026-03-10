@@ -25,6 +25,21 @@ Among the different steps of the pipeline:
 
 <img width="349" height="208" alt="image" src="https://github.com/user-attachments/assets/a84b81d0-b2aa-49e6-b27c-e444886931e1" />
 
+## Pipeline Inputs, Outputs and Dependencies
+**Input**
+- pair-end FASTQ files
+- metadata table
+- metabolomics tables
+- reference databases when needed
+
+**Output**
+- taxonomic abundance tables
+- KEGG/COG aggregated tables
+- diversity plots
+- differential abundance results
+- correlation and network objects/figures
+
+**Software/dependencies**
 
 ## :gear: How to use
 There is the master script that orchestrate all the scripts that have to be used, it is important to put in the master script the input files required, 
