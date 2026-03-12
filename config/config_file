@@ -1,1 +1,19 @@
-dd
+project_dir: "."
+input:
+  abundance_table: "data/abundance.csv"
+  taxonomy_table: "data/taxonomy.tsv"
+  pathway_dir: "data/pathway_annotation"
+  functional_dir: "data/functional_annotation"
+
+output:
+  filtering_dir: "results/0_Filtering_Diversity_DA"
+  pathway_dir: "results/1_Pathway_annotation"
+  functional_dir: "results/2_Functional_annotation"
+
+samples:
+  - T0R1
+  - T0R2
+  - T0R3
+  - T1R1
+  - T1R2
+  - T1R3
